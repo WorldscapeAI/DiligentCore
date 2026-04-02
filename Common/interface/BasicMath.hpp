@@ -1998,6 +1998,11 @@ template <class T> struct Matrix4x4
             };
     }
 
+    constexpr Vector4<T> GetTranslation() const
+    {
+        return Vector4<T>(_41, _42, _43, _44);
+    }
+
     template <typename Y>
     constexpr Matrix4x4<Y> Recast() const
     {
