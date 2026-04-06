@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2022 Diligent Graphics LLC
+ *  Copyright 2019-2025 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,8 +32,8 @@
 
 #include "EngineVkImplTraits.hpp"
 #include "BottomLevelASBase.hpp"
-#include "VulkanUtilities/VulkanObjectWrappers.hpp"
-#include "VulkanUtilities/VulkanMemoryManager.hpp"
+#include "VulkanUtilities/ObjectWrappers.hpp"
+#include "VulkanUtilities/MemoryManager.hpp"
 
 namespace Diligent
 {
@@ -65,11 +65,11 @@ public:
     IMPLEMENT_QUERY_INTERFACE_IN_PLACE(IID_BottomLevelASVk, TBottomLevelASBase)
 
 private:
-    VkDeviceAddress                         m_DeviceAddress = 0;
-    VulkanUtilities::AccelStructWrapper     m_VulkanBLAS;
-    VulkanUtilities::BufferWrapper          m_VulkanBuffer;
-    VulkanUtilities::VulkanMemoryAllocation m_MemoryAllocation;
-    VkDeviceSize                            m_MemoryAlignedOffset = 0;
+    VkDeviceAddress                     m_DeviceAddress = 0;
+    VulkanUtilities::AccelStructWrapper m_VulkanBLAS;
+    VulkanUtilities::BufferWrapper      m_VulkanBuffer;
+    VulkanUtilities::MemoryAllocation   m_MemoryAllocation;
+    VkDeviceSize                        m_MemoryAlignedOffset = 0;
 };
 
 } // namespace Diligent

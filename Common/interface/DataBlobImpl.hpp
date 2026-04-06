@@ -42,7 +42,7 @@ namespace Diligent
 {
 
 /// Base interface for a data blob
-class DataBlobImpl final : public Diligent::ObjectBase<IDataBlob>
+class DataBlobImpl final : public ObjectBase<IDataBlob>
 {
 public:
     using TBase          = ObjectBase<IDataBlob>;
@@ -55,7 +55,7 @@ public:
 
     ~DataBlobImpl() override;
 
-    virtual void DILIGENT_CALL_TYPE QueryInterface(const INTERFACE_ID& IID, IObject** ppInterface) override;
+    IMPLEMENT_QUERY_INTERFACE_IN_PLACE(IID_DataBlob, TBase);
 
     /// Sets the size of the internal data buffer
     virtual void DILIGENT_CALL_TYPE Resize(size_t NewSize) override;

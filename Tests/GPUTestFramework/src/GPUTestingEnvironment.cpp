@@ -233,16 +233,11 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
 #if D3D11_SUPPORTED
         case RENDER_DEVICE_TYPE_D3D11:
         {
-#    if ENGINE_DLL
-            // Load the dll and import GetEngineFactoryD3D11() function
-            GetEngineFactoryD3D11Type GetEngineFactoryD3D11 = LoadGraphicsEngineD3D11();
-            if (GetEngineFactoryD3D11 == nullptr)
+            IEngineFactoryD3D11* pFactoryD3D11 = LoadAndGetEngineFactoryD3D11();
+            if (pFactoryD3D11 == nullptr)
             {
                 LOG_ERROR_AND_THROW("Failed to load the engine");
             }
-#    endif
-
-            IEngineFactoryD3D11* pFactoryD3D11 = GetEngineFactoryD3D11();
             pFactoryD3D11->SetMessageCallback(EnvCI.MessageCallback);
             pFactoryD3D11->SetBreakOnError(false);
 
@@ -268,7 +263,7 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
             EngineCI.AdapterId           = FindAdapter(Adapters, EnvCI.AdapterType, EnvCI.AdapterId);
             NumDeferredCtx               = EnvCI.NumDeferredContexts;
             EngineCI.NumDeferredContexts = NumDeferredCtx / 2;
-            ppContexts.resize(std::max(size_t{1}, ContextCI.size()) + NumDeferredCtx);
+            ppContexts.resize((std::max)(size_t{1}, ContextCI.size()) + NumDeferredCtx);
             pFactoryD3D11->CreateDeviceAndContextsD3D11(EngineCI, &m_pDevice, ppContexts.data());
         }
         break;
@@ -277,15 +272,11 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
 #if D3D12_SUPPORTED
         case RENDER_DEVICE_TYPE_D3D12:
         {
-#    if ENGINE_DLL
-            // Load the dll and import GetEngineFactoryD3D12() function
-            GetEngineFactoryD3D12Type GetEngineFactoryD3D12 = LoadGraphicsEngineD3D12();
-            if (GetEngineFactoryD3D12 == nullptr)
+            IEngineFactoryD3D12* pFactoryD3D12 = LoadAndGetEngineFactoryD3D12();
+            if (pFactoryD3D12 == nullptr)
             {
                 LOG_ERROR_AND_THROW("Failed to load the engine");
             }
-#    endif
-            IEngineFactoryD3D12* pFactoryD3D12 = GetEngineFactoryD3D12();
             pFactoryD3D12->SetMessageCallback(EnvCI.MessageCallback);
             pFactoryD3D12->SetBreakOnError(false);
 
@@ -332,7 +323,7 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
 
             NumDeferredCtx               = EnvCI.NumDeferredContexts;
             EngineCI.NumDeferredContexts = NumDeferredCtx / 2;
-            ppContexts.resize(std::max(size_t{1}, ContextCI.size()) + NumDeferredCtx);
+            ppContexts.resize((std::max)(size_t{1}, ContextCI.size()) + NumDeferredCtx);
             pFactoryD3D12->CreateDeviceAndContextsD3D12(EngineCI, &m_pDevice, ppContexts.data());
         }
         break;
@@ -342,16 +333,11 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
         case RENDER_DEVICE_TYPE_GL:
         case RENDER_DEVICE_TYPE_GLES:
         {
-#    if EXPLICITLY_LOAD_ENGINE_GL_DLL
-            // Declare function pointer
-            // Load the dll and import GetEngineFactoryOpenGL() function
-            GetEngineFactoryOpenGLType GetEngineFactoryOpenGL = LoadGraphicsEngineOpenGL();
-            if (GetEngineFactoryOpenGL == nullptr)
+            IEngineFactoryOpenGL* pFactoryOpenGL = LoadAndGetEngineFactoryOpenGL();
+            if (pFactoryOpenGL == nullptr)
             {
                 LOG_ERROR_AND_THROW("Failed to load the engine");
             }
-#    endif
-            IEngineFactoryOpenGL* pFactoryOpenGL = GetEngineFactoryOpenGL();
             pFactoryOpenGL->SetMessageCallback(EnvCI.MessageCallback);
             pFactoryOpenGL->SetBreakOnError(false);
 
@@ -369,7 +355,7 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
             EngineCI.Window   = Window;
             EngineCI.Features = EnvCI.Features;
             NumDeferredCtx    = 0;
-            ppContexts.resize(std::max(size_t{1}, ContextCI.size()) + NumDeferredCtx);
+            ppContexts.resize((std::max)(size_t{1}, ContextCI.size()) + NumDeferredCtx);
             RefCntAutoPtr<ISwapChain> pSwapChain; // We will use testing swap chain instead
             pFactoryOpenGL->CreateDeviceAndSwapChainGL(
                 EngineCI, &m_pDevice, ppContexts.data(), SCDesc, &pSwapChain);
@@ -380,18 +366,16 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
 #if VULKAN_SUPPORTED
         case RENDER_DEVICE_TYPE_VULKAN:
         {
-#    if EXPLICITLY_LOAD_ENGINE_VK_DLL
-            // Load the dll and import GetEngineFactoryVk() function
-            GetEngineFactoryVkType GetEngineFactoryVk = LoadGraphicsEngineVk();
-            if (GetEngineFactoryVk == nullptr)
+            IEngineFactoryVk* pFactoryVk = LoadAndGetEngineFactoryVk();
+            if (pFactoryVk == nullptr)
             {
                 LOG_ERROR_AND_THROW("Failed to load the engine");
             }
-#    endif
-
-            IEngineFactoryVk* pFactoryVk = GetEngineFactoryVk();
             pFactoryVk->SetMessageCallback(EnvCI.MessageCallback);
             pFactoryVk->SetBreakOnError(false);
+
+            Version VulkanVersion = pFactoryVk->GetVulkanVersion();
+            VERIFY(VulkanVersion >= Version(1, 0), "Vulkan is not supported on this platform.");
 
             if (EnvCI.EnableDeviceSimulation)
                 pFactoryVk->EnableDeviceSimulation();
@@ -432,7 +416,7 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
 
             NumDeferredCtx               = EnvCI.NumDeferredContexts;
             EngineCI.NumDeferredContexts = NumDeferredCtx / 2;
-            ppContexts.resize(std::max(size_t{1}, ContextCI.size()) + NumDeferredCtx);
+            ppContexts.resize((std::max)(size_t{1}, ContextCI.size()) + NumDeferredCtx);
             pFactoryVk->CreateDeviceAndContextsVk(EngineCI, &m_pDevice, ppContexts.data());
         }
         break;
@@ -474,20 +458,17 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
 #if WEBGPU_SUPPORTED
         case RENDER_DEVICE_TYPE_WEBGPU:
         {
-#    if EXPLICITLY_LOAD_ENGINE_WEBGPU_DLL
-            GetEngineFactoryWebGPUType GetEngineFactoryWebGPU = LoadGraphicsEngineWebGPU();
-            if (GetEngineFactoryWebGPU == nullptr)
+            IEngineFactoryWebGPU* pFactoryWGPU = LoadAndGetEngineFactoryWebGPU();
+            if (pFactoryWGPU == nullptr)
             {
                 LOG_ERROR_AND_THROW("Failed to load the engine");
             }
-#    endif
-            IEngineFactoryWebGPU* pFactoryWGPU = GetEngineFactoryWebGPU();
             pFactoryWGPU->SetMessageCallback(MessageCallback);
             pFactoryWGPU->SetBreakOnError(false);
 
             EngineWebGPUCreateInfo EngineCI{};
             EngineCI.Features = EnvCI.Features;
-            ppContexts.resize(std::max(size_t{1}, ContextCI.size()) + NumDeferredCtx);
+            ppContexts.resize((std::max)(size_t{1}, ContextCI.size()) + NumDeferredCtx);
             pFactoryWGPU->CreateDeviceAndContextsWebGPU(EngineCI, &m_pDevice, ppContexts.data());
         }
 #endif
@@ -499,7 +480,7 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
 
     for (Uint32 ctx = NumDeferredCtx / 2; ctx < NumDeferredCtx; ++ctx)
     {
-        m_pDevice->CreateDeferredContext(&ppContexts[std::max(ContextCI.size(), size_t{1}) + ctx]);
+        m_pDevice->CreateDeferredContext(&ppContexts[(std::max)(ContextCI.size(), size_t{1}) + ctx]);
     }
 
     {
@@ -518,7 +499,7 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
     }
 
     constexpr Uint8 InvalidQueueId = 64; // MAX_COMMAND_QUEUES
-    m_NumImmediateContexts         = std::max(1u, static_cast<Uint32>(ContextCI.size()));
+    m_NumImmediateContexts         = (std::max)(1u, static_cast<Uint32>(ContextCI.size()));
     m_pDeviceContexts.resize(ppContexts.size());
     for (size_t i = 0; i < ppContexts.size(); ++i)
     {
@@ -604,15 +585,7 @@ GPUTestingEnvironment::GPUTestingEnvironment(const CreateInfo& EnvCI, const Swap
 #if ARCHIVER_SUPPORTED
     // Create archiver factory
     {
-#    if EXPLICITLY_LOAD_ARCHIVER_FACTORY_DLL
-        GetArchiverFactoryType GetArchiverFactory = LoadArchiverFactory();
-        if (GetArchiverFactory != nullptr)
-        {
-            m_ArchiverFactory = GetArchiverFactory();
-        }
-#    else
-        m_ArchiverFactory = Diligent::GetArchiverFactory();
-#    endif
+        m_ArchiverFactory = LoadAndGetArchiverFactory();
         m_ArchiverFactory->SetMessageCallback(EnvCI.MessageCallback);
         m_ArchiverFactory->SetBreakOnError(false);
     }
@@ -742,6 +715,15 @@ RefCntAutoPtr<ITexture> GPUTestingEnvironment::CreateTexture(const char* Name, T
 
     RefCntAutoPtr<ITexture> pTexture;
     m_pDevice->CreateTexture(TexDesc, pInitData ? &TexData : nullptr, &pTexture);
+    VERIFY_EXPR(pTexture != nullptr);
+
+    return pTexture;
+}
+
+RefCntAutoPtr<ITexture> GPUTestingEnvironment::CreateTexture(const TextureDesc& Desc, const TextureData* pData)
+{
+    RefCntAutoPtr<ITexture> pTexture;
+    m_pDevice->CreateTexture(Desc, pData, &pTexture);
     VERIFY_EXPR(pTexture != nullptr);
 
     return pTexture;

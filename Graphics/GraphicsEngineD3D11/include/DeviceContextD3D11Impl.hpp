@@ -58,7 +58,8 @@ public:
                            RenderDeviceD3D11Impl*   pDevice,
                            const DeviceContextDesc& Desc,
                            ID3D11DeviceContext1*    pd3d11DeviceContext);
-    virtual void DILIGENT_CALL_TYPE QueryInterface(const INTERFACE_ID& IID, IObject** ppInterface) override final;
+
+    IMPLEMENT_QUERY_INTERFACE_IN_PLACE(IID_DeviceContextD3D11, TDeviceContextBase)
 
     /// Implementation of IDeviceContext::Begin() in Direct3D11 backend.
     virtual void DILIGENT_CALL_TYPE Begin(Uint32 ImmediateContextId) override final;
@@ -359,7 +360,9 @@ private:
 
     void ClearStateCache();
 
-    void BindShaderResources(Uint32 BindSRBMask);
+    void BindShaderResources(Uint32 BindSRBMask,
+                             bool   DynamicBuffersIntact  = false,
+                             bool   InlineConstantsIntact = false);
 
     static constexpr int NumShaderTypes = D3D11ResourceBindPoints::NumShaderTypes;
     struct TCommittedResources

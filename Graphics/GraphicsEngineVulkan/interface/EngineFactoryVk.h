@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2023 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,9 +44,9 @@
 #    error Unsupported platform
 #endif
 
-#if ENGINE_DLL && PLATFORM_WIN32 && defined(_MSC_VER)
+#if DILIGENT_VK_SHARED && PLATFORM_WIN32 && defined(_MSC_VER)
 #    include "../../GraphicsEngine/interface/LoadEngineDll.h"
-#    define EXPLICITLY_LOAD_ENGINE_VK_DLL 1
+#    define DILIGENT_VK_EXPLICIT_LOAD 1
 #endif
 
 DILIGENT_BEGIN_NAMESPACE(Diligent)
@@ -99,13 +99,19 @@ DILIGENT_BEGIN_INTERFACE(IEngineFactoryVk, IEngineFactory)
                                            const NativeWindow REF  Window,
                                            ISwapChain**            ppSwapChain) PURE;
 
-    /// Enable device simulation layer (if available).
+    /// Enables device simulation layer (if available).
 
     /// Vulkan instance will be created with the device simulation layer.
     /// Use VK_DEVSIM_FILENAME environment variable to define the path to the .json file.
     ///
     /// \remarks Use this function before calling EnumerateAdapters() and CreateDeviceAndContextsVk().
     VIRTUAL void METHOD(EnableDeviceSimulation)(THIS) PURE;
+
+
+    /// Returns the supported Vulkan version. If Vulkan is not supported, returns 0.
+
+    /// This function can be used to check whether Vulkan is supported on the platform.
+    VIRTUAL const Version REF METHOD(GetVulkanVersion)(THIS) PURE;
 };
 DILIGENT_END_INTERFACE
 
@@ -118,18 +124,24 @@ DILIGENT_END_INTERFACE
 #    define IEngineFactoryVk_CreateDeviceAndContextsVk(This, ...) CALL_IFACE_METHOD(EngineFactoryVk, CreateDeviceAndContextsVk, This, __VA_ARGS__)
 #    define IEngineFactoryVk_CreateSwapChainVk(This, ...)         CALL_IFACE_METHOD(EngineFactoryVk, CreateSwapChainVk,         This, __VA_ARGS__)
 #    define IEngineFactoryVk_EnableDeviceSimulation(This)         CALL_IFACE_METHOD(EngineFactoryVk, EnableDeviceSimulation,    This)
+#    define IEngineFactoryVk_GetVulkanVersion(This)               CALL_IFACE_METHOD(EngineFactoryVk, GetVulkanVersion,          This)
 
 // clang-format on
 
 #endif
 
-#if EXPLICITLY_LOAD_ENGINE_VK_DLL
-
 typedef struct IEngineFactoryVk* (*GetEngineFactoryVkType)();
+
+#if DILIGENT_VK_EXPLICIT_LOAD
 
 inline GetEngineFactoryVkType DILIGENT_GLOBAL_FUNCTION(LoadGraphicsEngineVk)()
 {
-    return (GetEngineFactoryVkType)LoadEngineDll("GraphicsEngineVk", "GetEngineFactoryVk");
+    static GetEngineFactoryVkType GetFactoryFunc = NULL;
+    if (GetFactoryFunc == NULL)
+    {
+        GetFactoryFunc = (GetEngineFactoryVkType)LoadEngineDll("GraphicsEngineVk", "GetEngineFactoryVk");
+    }
+    return GetFactoryFunc;
 }
 
 #else
@@ -138,5 +150,21 @@ API_QUALIFIER
 struct IEngineFactoryVk* DILIGENT_GLOBAL_FUNCTION(GetEngineFactoryVk)();
 
 #endif
+
+/// Loads the graphics engine Vulkan implementation DLL if necessary and returns the engine factory.
+inline struct IEngineFactoryVk* DILIGENT_GLOBAL_FUNCTION(LoadAndGetEngineFactoryVk)()
+{
+    GetEngineFactoryVkType GetFactoryFunc = NULL;
+#if DILIGENT_VK_EXPLICIT_LOAD
+    GetFactoryFunc = DILIGENT_GLOBAL_FUNCTION(LoadGraphicsEngineVk)();
+    if (GetFactoryFunc == NULL)
+    {
+        return NULL;
+    }
+#else
+    GetFactoryFunc = DILIGENT_GLOBAL_FUNCTION(GetEngineFactoryVk);
+#endif
+    return GetFactoryFunc();
+}
 
 DILIGENT_END_NAMESPACE // namespace Diligent

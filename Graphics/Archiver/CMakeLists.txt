@@ -1,5 +1,7 @@
 cmake_minimum_required (VERSION 3.10)
 
+include(../../BuildTools/CMake/BuildUtils.cmake)
+
 project(Diligent-Archiver CXX)
 
 set(INCLUDE
@@ -54,7 +56,7 @@ if(METAL_SUPPORTED)
     set_property(SOURCE ${MTL_SOURCE} APPEND_STRING PROPERTY
         # Disable Metal API deprecation warnings such as
         #   'MTLArgumentType' is deprecated: first deprecated in macOS 13.0
-        COMPILE_FLAGS " -Wno-deprecated-declarations"
+        COMPILE_FLAGS " -Wno-deprecated-declarations -std=c++17"
     )
 endif()
 
@@ -76,7 +78,7 @@ add_library(Diligent-Archiver-shared SHARED
     readme.md
 )
 
-if(MSVC)
+if((PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS) AND NOT MINGW_BUILD)
     target_sources(Diligent-Archiver-shared PRIVATE ${DLL_SOURCE})
 endif()
 
@@ -96,7 +98,7 @@ if(DEFINED DILIGENT_CORE_COMMIT_HASH)
     target_compile_definitions(Diligent-Archiver-static PRIVATE DILIGENT_CORE_COMMIT_HASH="${DILIGENT_CORE_COMMIT_HASH}")
 endif()
 
-target_compile_definitions(Diligent-Archiver-shared PUBLIC ENGINE_DLL=1)
+target_compile_definitions(Diligent-Archiver-shared PUBLIC DILIGENT_ARCHIVER_SHARED=1)
 
 
 target_link_libraries(Diligent-Archiver-static
@@ -181,8 +183,8 @@ PUBLIC
     Diligent-ArchiverInterface
 PRIVATE
     Diligent-BuildSettings
-    ${WHOLE_ARCHIVE_FLAG} Diligent-Archiver-static ${NO_WHOLE_ARCHIVE_FLAG}
 )
+target_link_whole_archive(Diligent-Archiver-shared Diligent-Archiver-static)
 
 if(PLATFORM_WIN32)
     # Do not add 'lib' prefix when building with MinGW

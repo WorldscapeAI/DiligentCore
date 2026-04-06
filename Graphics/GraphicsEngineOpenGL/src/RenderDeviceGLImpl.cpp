@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -57,6 +57,16 @@ namespace Diligent
 {
 
 #if GL_KHR_debug
+
+template <int MessageId>
+bool IsFirstMessageOccurrence()
+{
+    static bool IsFirstTime = true;
+    const bool  Result      = IsFirstTime;
+    IsFirstTime             = false;
+    return Result;
+}
+
 static void GLAPIENTRY openglCallbackFunction(GLenum        source,
                                               GLenum        type,
                                               GLuint        id,
@@ -65,17 +75,34 @@ static void GLAPIENTRY openglCallbackFunction(GLenum        source,
                                               const GLchar* message,
                                               const void*   userParam)
 {
-    auto* ShowDebugOutput = reinterpret_cast<const int*>(userParam);
+    const int* ShowDebugOutput = reinterpret_cast<const int*>(userParam);
     if (*ShowDebugOutput == 0)
         return;
 
     // Note: disabling flood of notifications through glDebugMessageControl() has no effect,
     // so we have to filter them out here
-    if (id == 131185 || // Buffer detailed info: Buffer object <X> (bound to GL_XXXX ... , usage hint is GL_DYNAMIC_DRAW)
-                        // will use VIDEO memory as the source for buffer object operations.
-        id == 131186    // Buffer object <X> (bound to GL_XXXX, usage hint is GL_DYNAMIC_DRAW) is being copied/moved from VIDEO memory to HOST memory.
-    )
-        return;
+    switch (id)
+    {
+        case 131185:
+            // Buffer detailed info: Buffer object <X> (bound to GL_XXXX ... , usage hint is GL_DYNAMIC_DRAW)
+            // will use VIDEO memory as the source for buffer object operations.
+            return;
+        case 131186:
+            // Buffer object <X> (bound to GL_XXXX, usage hint is GL_DYNAMIC_DRAW) is being copied/moved from VIDEO memory to HOST memory.
+            return;
+        case 131220:
+            // Program/shader state usage warning: A fragment program/shader is required to correctly render to an integer framebuffer.
+            if (IsFirstMessageOccurrence<131220>())
+                break;
+            else
+                return;
+        case 131140:
+            // Rasterization usage warning: Dithering is enabled, but is not supported for integer framebuffers.
+            if (IsFirstMessageOccurrence<131140>())
+                break;
+            else
+                return;
+    }
 
     std::stringstream MessageSS;
 
@@ -187,7 +214,7 @@ RenderDeviceGLImpl::RenderDeviceGLImpl(IReferenceCounters*       pRefCounters,
     m_ExtensionStrings.reserve(NumExtensions);
     for (int Ext = 0; Ext < NumExtensions; ++Ext)
     {
-        auto CurrExtension = glGetStringi(GL_EXTENSIONS, Ext);
+        const GLubyte* CurrExtension = glGetStringi(GL_EXTENSIONS, Ext);
         CHECK_GL_ERROR("Failed to get extension string #", Ext);
         m_ExtensionStrings.emplace(reinterpret_cast<const Char*>(CurrExtension));
     }
@@ -354,11 +381,9 @@ RenderDeviceGLImpl::~RenderDeviceGLImpl()
 {
 }
 
-IMPLEMENT_QUERY_INTERFACE(RenderDeviceGLImpl, IID_RenderDeviceGL, TRenderDeviceBase)
-
 void RenderDeviceGLImpl::CreateBuffer(const BufferDesc& BuffDesc, const BufferData* pBuffData, IBuffer** ppBuffer, bool bIsDeviceInternal)
 {
-    auto pDeviceContext = GetImmediateContext(0);
+    RefCntAutoPtr<DeviceContextGLImpl> pDeviceContext = GetImmediateContext(0);
     VERIFY(pDeviceContext, "Immediate device context has been destroyed");
     CreateBufferImpl(ppBuffer, BuffDesc, std::ref(pDeviceContext->GetContextState()), pBuffData, bIsDeviceInternal);
 }
@@ -372,7 +397,7 @@ void RenderDeviceGLImpl::CreateBufferFromGLHandle(Uint32 GLHandle, const BufferD
 {
     DEV_CHECK_ERR(GLHandle != 0, "GL buffer handle must not be null");
 
-    auto pDeviceContext = GetImmediateContext(0);
+    RefCntAutoPtr<DeviceContextGLImpl> pDeviceContext = GetImmediateContext(0);
     VERIFY(pDeviceContext, "Immediate device context has been destroyed");
     CreateBufferImpl(ppBuffer, BuffDesc, std::ref(pDeviceContext->GetContextState()), GLHandle, /*bIsDeviceInternal =*/false);
 }
@@ -403,11 +428,11 @@ void RenderDeviceGLImpl::CreateTexture(const TextureDesc& TexDesc, const Texture
         "texture", TexDesc, ppTexture,
         [&]() //
         {
-            auto pDeviceContext = GetImmediateContext(0);
+            RefCntAutoPtr<DeviceContextGLImpl> pDeviceContext = GetImmediateContext(0);
             VERIFY(pDeviceContext, "Immediate device context has been destroyed");
-            auto& GLState = pDeviceContext->GetContextState();
+            GLContextState& GLState = pDeviceContext->GetContextState();
 
-            const auto& FmtInfo = GetTextureFormatInfo(TexDesc.Format);
+            const TextureFormatInfo& FmtInfo = GetTextureFormatInfo(TexDesc.Format);
             if (!FmtInfo.Supported)
             {
                 LOG_ERROR_AND_THROW(FmtInfo.Name, " is not supported texture format");
@@ -447,7 +472,7 @@ void RenderDeviceGLImpl::CreateTexture(const TextureDesc& TexDesc, const Texture
                 default: LOG_ERROR_AND_THROW("Unknown texture type. (Did you forget to initialize the Type member of TextureDesc structure?)");
             }
 
-            pTextureOGL->QueryInterface(IID_Texture, reinterpret_cast<IObject**>(ppTexture));
+            pTextureOGL->QueryInterface(IID_Texture, ppTexture);
             pTextureOGL->CreateDefaultViews();
         } //
     );
@@ -469,9 +494,9 @@ void RenderDeviceGLImpl::CreateTextureFromGLHandle(Uint32             GLHandle,
         "texture", TexDesc, ppTexture,
         [&]() //
         {
-            auto pDeviceContext = GetImmediateContext(0);
+            RefCntAutoPtr<DeviceContextGLImpl> pDeviceContext = GetImmediateContext(0);
             VERIFY(pDeviceContext, "Immediate device context has been destroyed");
-            auto& GLState = pDeviceContext->GetContextState();
+            GLContextState& GLState = pDeviceContext->GetContextState();
 
             TextureBaseGL* pTextureOGL = nullptr;
             switch (TexDesc.Type)
@@ -507,7 +532,7 @@ void RenderDeviceGLImpl::CreateTextureFromGLHandle(Uint32             GLHandle,
                 default: LOG_ERROR_AND_THROW("Unknown texture type. (Did you forget to initialize the Type member of TextureDesc structure?)");
             }
 
-            pTextureOGL->QueryInterface(IID_Texture, reinterpret_cast<IObject**>(ppTexture));
+            pTextureOGL->QueryInterface(IID_Texture, ppTexture);
             pTextureOGL->CreateDefaultViews();
         } //
     );
@@ -529,7 +554,7 @@ void RenderDeviceGLImpl::CreateDummyTexture(const TextureDesc& TexDesc, RESOURCE
                 default: LOG_ERROR_AND_THROW("Unsupported texture type.");
             }
 
-            pTextureOGL->QueryInterface(IID_Texture, reinterpret_cast<IObject**>(ppTexture));
+            pTextureOGL->QueryInterface(IID_Texture, ppTexture);
             pTextureOGL->CreateDefaultViews();
         } //
     );
@@ -588,9 +613,9 @@ void RenderDeviceGLImpl::CreateRenderPass(const RenderPassDesc& Desc, IRenderPas
 
 void RenderDeviceGLImpl::CreateFramebuffer(const FramebufferDesc& Desc, IFramebuffer** ppFramebuffer)
 {
-    auto pDeviceContext = GetImmediateContext(0);
+    RefCntAutoPtr<DeviceContextGLImpl> pDeviceContext = GetImmediateContext(0);
     VERIFY(pDeviceContext, "Immediate device context has been destroyed");
-    auto& GLState = pDeviceContext->GetContextState();
+    GLContextState& GLState = pDeviceContext->GetContextState();
 
     CreateFramebufferImpl(ppFramebuffer, Desc, std::ref(GLState));
 }
@@ -655,12 +680,14 @@ void RenderDeviceGLImpl::CreateDeferredContext(IDeviceContext** ppContext)
     *ppContext = nullptr;
 }
 
-SparseTextureFormatInfo RenderDeviceGLImpl::GetSparseTextureFormatInfo(TEXTURE_FORMAT     TexFormat,
-                                                                       RESOURCE_DIMENSION Dimension,
-                                                                       Uint32             SampleCount) const
+Bool RenderDeviceGLImpl::GetSparseTextureFormatInfo(TEXTURE_FORMAT           TexFormat,
+                                                    RESOURCE_DIMENSION       Dimension,
+                                                    Uint32                   SampleCount,
+                                                    SparseTextureFormatInfo& FormatInfo) const
 {
     UNSUPPORTED("GetSparseTextureFormatInfo is not supported in OpenGL");
-    return {};
+    FormatInfo = {};
+    return false;
 }
 
 bool RenderDeviceGLImpl::CheckExtension(const Char* ExtensionString) const
@@ -670,16 +697,18 @@ bool RenderDeviceGLImpl::CheckExtension(const Char* ExtensionString) const
 
 void RenderDeviceGLImpl::InitAdapterInfo()
 {
-    const auto GLVersion = m_DeviceInfo.APIVersion;
+    const Version GLVersion = m_DeviceInfo.APIVersion;
 
     // Set graphics adapter properties
     {
-        const std::string glstrVendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
-        const std::string Vendor      = StrToLower(glstrVendor);
+        const std::string glstrVendor   = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+        const std::string glstrRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        const std::string Vendor        = StrToLower(glstrVendor);
         LOG_INFO_MESSAGE("GPU Vendor: ", Vendor);
+        LOG_INFO_MESSAGE("GPU Renderer: ", glstrRenderer);
 
-        for (size_t i = 0; i < _countof(m_AdapterInfo.Description) - 1 && i < glstrVendor.length(); ++i)
-            m_AdapterInfo.Description[i] = glstrVendor[i];
+        for (size_t i = 0; i < _countof(m_AdapterInfo.Description) - 1 && i < glstrRenderer.length(); ++i)
+            m_AdapterInfo.Description[i] = glstrRenderer[i];
 
         m_AdapterInfo.Type       = ADAPTER_TYPE_UNKNOWN;
         m_AdapterInfo.VendorId   = 0;
@@ -693,17 +722,25 @@ void RenderDeviceGLImpl::InitAdapterInfo()
         else if (Vendor.find("ati") != std::string::npos ||
                  Vendor.find("amd") != std::string::npos)
             m_AdapterInfo.Vendor = ADAPTER_VENDOR_AMD;
-        else if (Vendor.find("qualcomm"))
+        else if (Vendor.find("qualcomm") != std::string::npos)
             m_AdapterInfo.Vendor = ADAPTER_VENDOR_QUALCOMM;
-        else if (Vendor.find("arm"))
+        else if (Vendor.find("arm") != std::string::npos)
             m_AdapterInfo.Vendor = ADAPTER_VENDOR_ARM;
+        else if (Vendor.find("microsoft") != std::string::npos)
+            m_AdapterInfo.Vendor = ADAPTER_VENDOR_MSFT;
+        else if (Vendor.find("apple") != std::string::npos)
+            m_AdapterInfo.Vendor = ADAPTER_VENDOR_APPLE;
+        else if (Vendor.find("mesa") != std::string::npos)
+            m_AdapterInfo.Vendor = ADAPTER_VENDOR_MESA;
+        else if (Vendor.find("broadcom") != std::string::npos)
+            m_AdapterInfo.Vendor = ADAPTER_VENDOR_BROADCOM;
         else
             m_AdapterInfo.Vendor = ADAPTER_VENDOR_UNKNOWN;
     }
 
     // Set memory properties
     {
-        auto& Mem = m_AdapterInfo.Memory;
+        AdapterMemoryInfo& Mem = m_AdapterInfo.Memory;
 
         switch (m_AdapterInfo.Vendor)
         {
@@ -761,7 +798,7 @@ void RenderDeviceGLImpl::InitAdapterInfo()
 #define ENABLE_FEATURE(FeatureName, Supported) \
     Features.FeatureName = (Supported) ? DEVICE_FEATURE_STATE_ENABLED : DEVICE_FEATURE_STATE_DISABLED;
 
-        auto& Features = m_AdapterInfo.Features;
+        DeviceFeatures& Features = m_AdapterInfo.Features;
 
         GLint MaxTextureSize = 0;
         glGetIntegerv(GL_MAX_TEXTURE_SIZE, &MaxTextureSize);
@@ -788,6 +825,7 @@ void RenderDeviceGLImpl::InitAdapterInfo()
         Features.TileShaders                 = DEVICE_FEATURE_STATE_DISABLED;
         Features.SubpassFramebufferFetch     = DEVICE_FEATURE_STATE_DISABLED;
         Features.TextureComponentSwizzle     = DEVICE_FEATURE_STATE_DISABLED;
+        Features.SpecializationConstants     = DEVICE_FEATURE_STATE_DISABLED;
 
         {
             bool WireframeFillSupported = (glPolygonMode != nullptr);
@@ -821,8 +859,8 @@ void RenderDeviceGLImpl::InitAdapterInfo()
             ENABLE_FEATURE(VertexPipelineUAVWritesAndAtomics, MaxVertexSSBOs);
         }
 
-        auto& TexProps = m_AdapterInfo.Texture;
-        auto& SamProps = m_AdapterInfo.Sampler;
+        TextureProperties& TexProps = m_AdapterInfo.Texture;
+        SamplerProperties& SamProps = m_AdapterInfo.Sampler;
         if (m_DeviceInfo.Type == RENDER_DEVICE_TYPE_GL)
         {
             const bool IsGL46OrAbove = GLVersion >= Version{4, 6};
@@ -899,7 +937,7 @@ void RenderDeviceGLImpl::InitAdapterInfo()
         {
             VERIFY(m_DeviceInfo.Type == RENDER_DEVICE_TYPE_GLES, "Unexpected device type: OpenGLES expected");
 
-            const auto* Extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+            const char* Extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
             LOG_INFO_MESSAGE("Supported extensions: \n", Extensions);
 
             const bool IsGLES31OrAbove = GLVersion >= Version{3, 1};
@@ -992,7 +1030,7 @@ void RenderDeviceGLImpl::InitAdapterInfo()
             CHECK_GL_ERROR("glGetIntegerv(GL_SUBGROUP_SUPPORTED_FEATURES_KHR)");
 
             {
-                auto& WaveOpProps{m_AdapterInfo.WaveOp};
+                WaveOpProperties& WaveOpProps{m_AdapterInfo.WaveOp};
                 WaveOpProps.MinSize         = static_cast<Uint32>(SubgroupSize);
                 WaveOpProps.MaxSize         = static_cast<Uint32>(SubgroupSize);
                 WaveOpProps.SupportedStages = GLShaderBitsToShaderTypes(SubgroupStages);
@@ -1024,10 +1062,12 @@ void RenderDeviceGLImpl::InitAdapterInfo()
 
         // Buffer properties
         {
-            auto& BufferProps{m_AdapterInfo.Buffer};
+            BufferProperties& BufferProps{m_AdapterInfo.Buffer};
             BufferProps.ConstantBufferOffsetAlignment   = 256;
             BufferProps.StructuredBufferOffsetAlignment = 16;
-            ASSERT_SIZEOF(BufferProps, 8, "Did you add a new member to BufferProperites? Please initialize it here.");
+            BufferProps.TextureUpdateOffsetAlignment    = 4;
+            BufferProps.TextureUpdateStrideAlignment    = 4;
+            ASSERT_SIZEOF(BufferProps, 16, "Did you add a new member to BufferProperites? Please initialize it here.");
         }
 #undef ENABLE_FEATURE
     }
@@ -1036,7 +1076,7 @@ void RenderDeviceGLImpl::InitAdapterInfo()
 #if GL_ARB_compute_shader
     if (m_AdapterInfo.Features.ComputeShaders)
     {
-        auto& CompProps{m_AdapterInfo.ComputeShader};
+        ComputeShaderProperties& CompProps{m_AdapterInfo.ComputeShader};
         glGetIntegerv(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, reinterpret_cast<GLint*>(&CompProps.SharedMemorySize));
         CHECK_GL_ERROR("glGetIntegerv(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE)");
         glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, reinterpret_cast<GLint*>(&CompProps.MaxThreadGroupInvocations));
@@ -1062,7 +1102,7 @@ void RenderDeviceGLImpl::InitAdapterInfo()
 
     // Draw command properties
     {
-        auto& DrawCommandProps{m_AdapterInfo.DrawCommand};
+        DrawCommandProperties& DrawCommandProps{m_AdapterInfo.DrawCommand};
         DrawCommandProps.MaxDrawIndirectCount = ~0u; // no limits
         DrawCommandProps.CapFlags             = DRAW_COMMAND_CAP_FLAG_NONE;
         if (m_DeviceInfo.Type == RENDER_DEVICE_TYPE_GL)
@@ -1084,7 +1124,7 @@ void RenderDeviceGLImpl::InitAdapterInfo()
         }
         else if (m_DeviceInfo.Type == RENDER_DEVICE_TYPE_GLES)
         {
-            const auto* Extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+            const char* Extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
             if (GLVersion >= Version{3, 1} || strstr(Extensions, "draw_indirect"))
                 DrawCommandProps.CapFlags |= DRAW_COMMAND_CAP_FLAG_DRAW_INDIRECT;
 
@@ -1121,20 +1161,23 @@ void RenderDeviceGLImpl::InitAdapterInfo()
         m_AdapterInfo.Queues[0].TextureCopyGranularity[2] = 1;
     }
 
-    ASSERT_SIZEOF(DeviceFeatures, 47, "Did you add a new feature to DeviceFeatures? Please handle its status here.");
+    ASSERT_SIZEOF(DeviceFeatures, 48, "Did you add a new feature to DeviceFeatures? Please handle its status here.");
 }
 
 void RenderDeviceGLImpl::FlagSupportedTexFormats()
 {
-    const auto& DeviceInfo     = GetDeviceInfo();
-    const auto  bDekstopGL     = DeviceInfo.Type == RENDER_DEVICE_TYPE_GL;
-    const auto  bGLES30OrAbove = DeviceInfo.Type == RENDER_DEVICE_TYPE_GLES && DeviceInfo.APIVersion >= Version{3, 0};
+    const RenderDeviceInfo& DeviceInfo     = GetDeviceInfo();
+    const bool              bDekstopGL     = DeviceInfo.Type == RENDER_DEVICE_TYPE_GL;
+    const bool              bGL430OrAbove  = DeviceInfo.Type == RENDER_DEVICE_TYPE_GL && DeviceInfo.APIVersion >= Version{4, 3};
+    const bool              bGLES30OrAbove = DeviceInfo.Type == RENDER_DEVICE_TYPE_GLES && DeviceInfo.APIVersion >= Version{3, 0};
+    const bool              bGLES31OrAbove = DeviceInfo.Type == RENDER_DEVICE_TYPE_GLES && DeviceInfo.APIVersion >= Version{3, 1};
 
     const bool bRGTC       = CheckExtension("GL_EXT_texture_compression_rgtc") || CheckExtension("GL_ARB_texture_compression_rgtc");
     const bool bBPTC       = CheckExtension("GL_EXT_texture_compression_bptc") || CheckExtension("GL_ARB_texture_compression_bptc");
     const bool bS3TC       = CheckExtension("GL_EXT_texture_compression_s3tc") || CheckExtension("GL_WEBGL_compressed_texture_s3tc");
     const bool bTexNorm16  = bDekstopGL || CheckExtension("GL_EXT_texture_norm16"); // Only for ES3.1+
     const bool bTexSwizzle = bDekstopGL || bGLES30OrAbove || CheckExtension("GL_ARB_texture_swizzle");
+    const bool bStencilTex = bGL430OrAbove || bGLES31OrAbove || CheckExtension("GL_ARB_stencil_texturing");
 
 #if PLATFORM_WEB
     const bool bETC2 = CheckExtension("GL_WEBGL_compressed_texture_etc");
@@ -1180,7 +1223,7 @@ void RenderDeviceGLImpl::FlagSupportedTexFormats()
         if (DeviceInfo.Type == RENDER_DEVICE_TYPE_GLES && DeviceInfo.APIVersion >= MinGLESVersion)
             return BindFlag;
 
-        for (const auto* Ext : Extensions)
+        for (const char* Ext : Extensions)
         {
             if (CheckExtension(Ext))
                 return BindFlag;
@@ -1243,7 +1286,7 @@ void RenderDeviceGLImpl::FlagSupportedTexFormats()
     FlagFormat(TEX_FORMAT_R32G8X24_TYPELESS,          true                                      );
     FlagFormat(TEX_FORMAT_D32_FLOAT_S8X24_UINT,       true,         BIND_DEPTH_STENCIL          );
     FlagFormat(TEX_FORMAT_R32_FLOAT_X8X24_TYPELESS,   true,         TexBindFlags,     bDekstopGL);
-    FlagFormat(TEX_FORMAT_X32_TYPELESS_G8X24_UINT,    false                                     );
+    FlagFormat(TEX_FORMAT_X32_TYPELESS_G8X24_UINT,    bStencilTex,  BIND_SHADER_RESOURCE,  false);
     FlagFormat(TEX_FORMAT_RGB10A2_TYPELESS,           true                                      );
     FlagFormat(TEX_FORMAT_RGB10A2_UNORM,              true,         BindSrvRtvUav,          true);
     FlagFormat(TEX_FORMAT_RGB10A2_UINT,               true,         BindSrvRtvUav               );
@@ -1268,7 +1311,7 @@ void RenderDeviceGLImpl::FlagSupportedTexFormats()
     FlagFormat(TEX_FORMAT_R24G8_TYPELESS,             true                                      );
     FlagFormat(TEX_FORMAT_D24_UNORM_S8_UINT,          true,         BIND_DEPTH_STENCIL          );
     FlagFormat(TEX_FORMAT_R24_UNORM_X8_TYPELESS,      true,         TexBindFlags,           true);
-    FlagFormat(TEX_FORMAT_X24_TYPELESS_G8_UINT,       false                                     );
+    FlagFormat(TEX_FORMAT_X24_TYPELESS_G8_UINT,       bStencilTex,  BIND_SHADER_RESOURCE,  false);
     FlagFormat(TEX_FORMAT_RG8_TYPELESS,               true                                      );
     FlagFormat(TEX_FORMAT_RG8_UNORM,                  true,         U8BindFlags,            true);
     FlagFormat(TEX_FORMAT_RG8_UINT,                   true,         UI8BindFlags                );
@@ -1342,12 +1385,12 @@ void RenderDeviceGLImpl::FlagSupportedTexFormats()
     std::vector<Uint8> ZeroData(TestTextureDim * TestTextureDim * MaxTexelSize);
 
     // Go through all formats and try to create small 2D texture to check if the format is supported
-    for (auto& FmtInfo : m_TextureFormatsInfo)
+    for (TextureFormatInfoExt& FmtInfo : m_TextureFormatsInfo)
     {
         if (FmtInfo.Format == TEX_FORMAT_UNKNOWN)
             continue;
 
-        auto GLFmt = TexFormatToGLInternalTexFormat(FmtInfo.Format);
+        GLenum GLFmt = TexFormatToGLInternalTexFormat(FmtInfo.Format);
         if (GLFmt == 0)
         {
             VERIFY(!FmtInfo.Supported, "Format should be marked as unsupported");
@@ -1381,12 +1424,12 @@ void RenderDeviceGLImpl::FlagSupportedTexFormats()
                 // For some reason glTexStorage2D() may succeed, but upload operation
                 // will later fail. So we need to additionally try to upload some
                 // data to the texture
-                const auto& TransferAttribs = GetNativePixelTransferAttribs(FmtInfo.Format);
+                const NativePixelAttribs& TransferAttribs = GetNativePixelTransferAttribs(FmtInfo.Format);
                 if (TransferAttribs.IsCompressed)
                 {
-                    const auto& FmtAttribs = GetTextureFormatAttribs(FmtInfo.Format);
+                    const TextureFormatAttribs& FmtAttribs = GetTextureFormatAttribs(FmtInfo.Format);
                     static_assert((TestTextureDim & (TestTextureDim - 1)) == 0, "Test texture dim must be power of two!");
-                    auto BlockBytesInRow = (TestTextureDim / int{FmtAttribs.BlockWidth}) * int{FmtAttribs.ComponentSize};
+                    int BlockBytesInRow = (TestTextureDim / int{FmtAttribs.BlockWidth}) * int{FmtAttribs.ComponentSize};
                     glCompressedTexSubImage2D(GL_TEXTURE_2D, 0, // mip level
                                               0, 0, TestTextureDim, TestTextureDim,
                                               GLFmt,
@@ -1439,15 +1482,15 @@ bool CreateTestGLTexture(GLContextState& GlCtxState, GLenum BindTarget, CreateFu
 
 void RenderDeviceGLImpl::TestTextureFormat(TEXTURE_FORMAT TexFormat)
 {
-    auto& TexFormatInfo = m_TextureFormatsInfo[TexFormat];
+    TextureFormatInfoExt& TexFormatInfo = m_TextureFormatsInfo[TexFormat];
     VERIFY(TexFormatInfo.Supported, "Texture format is not supported");
 
-    auto GLFmt = TexFormatToGLInternalTexFormat(TexFormat);
+    GLenum GLFmt = TexFormatToGLInternalTexFormat(TexFormat);
     VERIFY(GLFmt != 0, "Incorrect internal GL format");
 
-    auto pDeviceContext = GetImmediateContext(0);
+    RefCntAutoPtr<DeviceContextGLImpl> pDeviceContext = GetImmediateContext(0);
     VERIFY(pDeviceContext, "Immediate device context has been destroyed");
-    auto& ContextState = pDeviceContext->GetContextState();
+    GLContextState& ContextState = pDeviceContext->GetContextState();
 
     const int TestTextureDim   = 32;
     const int TestArraySlices  = 8;
@@ -1461,7 +1504,7 @@ void RenderDeviceGLImpl::TestTextureFormat(TEXTURE_FORMAT TexFormat)
     // Clear error code
     glGetError();
 
-    const auto& TexProps = GetAdapterInfo().Texture;
+    const TextureProperties& TexProps = GetAdapterInfo().Texture;
     // Create test texture 1D
     if (TexProps.MaxTexture1DDimension != 0 && TexFormatInfo.ComponentType != COMPONENT_TYPE_COMPRESSED)
     {

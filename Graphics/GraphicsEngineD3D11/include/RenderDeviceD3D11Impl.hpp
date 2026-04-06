@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,7 +50,7 @@ public:
                           ID3D11Device*                pd3d11Device) noexcept(false);
     ~RenderDeviceD3D11Impl();
 
-    virtual void DILIGENT_CALL_TYPE QueryInterface(const INTERFACE_ID& IID, IObject** ppInterface) override final;
+    IMPLEMENT_QUERY_INTERFACE_IN_PLACE(IID_RenderDeviceD3D11, TRenderDeviceBase)
 
     /// Implementation of IRenderDevice::CreateBuffer() in Direct3D11 backend.
     virtual void DILIGENT_CALL_TYPE CreateBuffer(const BufferDesc& BuffDesc,
@@ -163,9 +163,10 @@ public:
     virtual void DILIGENT_CALL_TYPE IdleGPU() override final;
 
     /// Implementation of IRenderDevice::GetSparseTextureFormatInfo() in Direct3D11 backend.
-    virtual SparseTextureFormatInfo DILIGENT_CALL_TYPE GetSparseTextureFormatInfo(TEXTURE_FORMAT     TexFormat,
-                                                                                  RESOURCE_DIMENSION Dimension,
-                                                                                  Uint32             SampleCount) const override final;
+    virtual Bool DILIGENT_CALL_TYPE GetSparseTextureFormatInfo(TEXTURE_FORMAT           TexFormat,
+                                                               RESOURCE_DIMENSION       Dimension,
+                                                               Uint32                   SampleCount,
+                                                               SparseTextureFormatInfo& FormatInfo) const override final;
 
     size_t GetCommandQueueCount() const { return 1; }
     Uint64 GetCommandQueueMask() const { return Uint64{1}; }

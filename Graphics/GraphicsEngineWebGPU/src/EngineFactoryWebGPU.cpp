@@ -1,5 +1,5 @@
 /*
- *  Copyright 2023-2025 Diligent Graphics LLC
+ *  Copyright 2023-2026 Diligent Graphics LLC
  *
  *  You may not use this file except in compliance with the License (see License.txt).
  *
@@ -403,13 +403,14 @@ DeviceFeatures GetSupportedFeatures(WGPUAdapter wgpuAdapter, WGPUDevice wgpuDevi
     Features.NativeMultiDraw                   = DEVICE_FEATURE_STATE_DISABLED;
     Features.AsyncShaderCompilation            = DEVICE_FEATURE_STATE_ENABLED;
     Features.FormattedBuffers                  = DEVICE_FEATURE_STATE_DISABLED;
+    Features.SpecializationConstants           = DEVICE_FEATURE_STATE_ENABLED;
 
     Features.TimestampQueries = CheckFeature(WGPUFeatureName_TimestampQuery);
     Features.DurationQueries  = Features.TimestampQueries ?
         CheckFeature(WGPUFeatureName_ChromiumExperimentalTimestampQueryInsidePasses) :
         DEVICE_FEATURE_STATE_DISABLED;
 
-    ASSERT_SIZEOF(DeviceFeatures, 47, "Did you add a new feature to DeviceFeatures? Please handle its status here.");
+    ASSERT_SIZEOF(DeviceFeatures, 48, "Did you add a new feature to DeviceFeatures? Please handle its status here.");
 
     return Features;
 }
@@ -526,6 +527,9 @@ GraphicsAdapterInfo GetGraphicsAdapterInfo(WGPUAdapter wgpuAdapter, WGPUDevice w
         BufferProperties& BufferInfo{AdapterInfo.Buffer};
         BufferInfo.ConstantBufferOffsetAlignment   = wgpuSupportedLimits.limits.minUniformBufferOffsetAlignment;
         BufferInfo.StructuredBufferOffsetAlignment = wgpuSupportedLimits.limits.minStorageBufferOffsetAlignment;
+        BufferInfo.TextureUpdateOffsetAlignment    = 256; // Where is this specified?
+        BufferInfo.TextureUpdateStrideAlignment    = 256; // From spec
+        ASSERT_SIZEOF(BufferInfo, 16, "Did you add a new member to BufferProperties? Please initialize it here.");
     }
 
     // Set sampler info
@@ -622,7 +626,7 @@ void EngineFactoryWebGPUImpl::CreateSwapChainWebGPU(IRenderDevice*       pDevice
         IMemoryAllocator&        RawMemAllocator      = GetRawAllocator();
 
         SwapChainWebGPUImpl* pSwapChainWebGPU = NEW_RC_OBJ(RawMemAllocator, "SwapChainWebGPUImpl instance", SwapChainWebGPUImpl)(SCDesc, pDeviceWebGPU, pDeviceContextWebGPU, Window);
-        pSwapChainWebGPU->QueryInterface(IID_SwapChain, reinterpret_cast<IObject**>(ppSwapChain));
+        pSwapChainWebGPU->QueryInterface(IID_SwapChain, ppSwapChain);
     }
     catch (const std::runtime_error&)
     {
@@ -675,7 +679,6 @@ void EngineFactoryWebGPUImpl::AttachToWebGPUDevice(void*                        
 
         const DeviceFeatures EnabledFeatures = GetSupportedFeatures(nullptr, static_cast<WGPUDevice>(wgpuDevice));
 
-        SetRawAllocator(EngineCI.pRawMemAllocator);
         IMemoryAllocator& RawMemAllocator = GetRawAllocator();
 
         RenderDeviceWebGPUImpl* pRenderDeviceWebGPU{
@@ -690,7 +693,7 @@ void EngineFactoryWebGPUImpl::AttachToWebGPUDevice(void*                        
                     static_cast<WGPUAdapter>(wgpuAdapter),
                     static_cast<WGPUDevice>(wgpuDevice),
                 })};
-        pRenderDeviceWebGPU->QueryInterface(IID_RenderDevice, reinterpret_cast<IObject**>(ppDevice));
+        pRenderDeviceWebGPU->QueryInterface(IID_RenderDevice, ppDevice);
 
         DeviceContextWebGPUImpl* pDeviceContextWebGPU{
             NEW_RC_OBJ(RawMemAllocator, "DeviceContextWebGPUImpl instance", DeviceContextWebGPUImpl)(
@@ -702,7 +705,7 @@ void EngineFactoryWebGPUImpl::AttachToWebGPUDevice(void*                        
                     0,     // Context id
                     0      // Queue id
                 })};
-        pDeviceContextWebGPU->QueryInterface(IID_DeviceContext, reinterpret_cast<IObject**>(ppImmediateContext));
+        pDeviceContextWebGPU->QueryInterface(IID_DeviceContext, ppImmediateContext);
         pRenderDeviceWebGPU->SetImmediateContext(0, pDeviceContextWebGPU);
     }
     catch (const std::runtime_error&)

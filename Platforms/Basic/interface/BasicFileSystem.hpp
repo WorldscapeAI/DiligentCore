@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -141,10 +141,13 @@ struct FindFileData
 struct BasicFileSystem
 {
 public:
+    static constexpr Char UnixSlash = '/';
+    static constexpr Char WinSlash  = '\\';
+
 #if PLATFORM_WIN32 || PLATFORM_UNIVERSAL_WINDOWS
-    static constexpr Char SlashSymbol = '\\';
+    static constexpr Char SlashSymbol = WinSlash;
 #else
-    static constexpr Char SlashSymbol = '/';
+    static constexpr Char SlashSymbol = UnixSlash;
 #endif
 
     using SearchFilesResult = std::vector<FindFileData>;
@@ -160,7 +163,7 @@ public:
 
     static bool IsSlash(Char c)
     {
-        return c == '/' || c == '\\';
+        return c == UnixSlash || c == WinSlash;
     }
 
     static void CorrectSlashes(String& Path, Char Slash = 0);
@@ -229,13 +232,33 @@ public:
     /// \param [in]  PathTo          - Path that defines the endpoint of the relative path.
     ///                                Must not be null.
     /// \param [in]  IsToDirectory   - Indicates if PathTo is a directory.
+    /// \param [in]  Slash           - Slash symbol to use in the returned path.
+    ///                                If 0, platform-specific slash is used.
     ///
     /// \return                        Relative path from PathFrom to PathTo.
     ///                                If no relative path exists, PathFrom is returned.
     static std::string GetRelativePath(const Char* PathFrom,
                                        bool        IsFromDirectory,
                                        const Char* PathTo,
-                                       bool        IsToDirectory);
+                                       bool        IsToDirectory,
+                                       Char        Slash = 0);
+
+    /// Returns the longest common *path-component* prefix of two paths.
+    ///
+    /// Components are separated by '/' or '\\'. Prefix matching is done
+    /// component-by-component (no partial component matches). If one path is absolute
+    /// and the other is relative, the prefix is empty. Repeated separators are ignored
+    /// for matching, but the returned lengths count characters in the original strings,
+    /// so Prefix1Len and Prefix2Len may differ.
+    ///
+    /// \param [in]  Path1         - First path. Must not be null.
+    /// \param [in]  Path2         - Second path. Must not be null.
+    /// \param [out] Prefix1Len    - Length of the common prefix in Path1.
+    /// \param [out] Prefix2Len    - Length of the common prefix in Path2.
+    static void GetCommonPathPrefix(const char* Path1,
+                                    const char* Path2,
+                                    size_t&     Prefix1Len,
+                                    size_t&     Prefix2Len);
 
     static std::string FileDialog(const FileDialogAttribs& DialogAttribs);
     static std::string OpenFolderDialog(const char* Title);

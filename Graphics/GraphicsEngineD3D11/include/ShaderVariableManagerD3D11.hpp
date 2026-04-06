@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2023 Diligent Graphics LLC
+ *  Copyright 2019-2025 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -114,6 +114,8 @@ public:
             }
         }
 
+        using IObject::QueryInterface;
+
         virtual void DILIGENT_CALL_TYPE GetHLSLResourceDesc(HLSLShaderResourceDesc& HLSLResDesc) const override final
         {
             this->GetResourceDesc(HLSLResDesc);
@@ -130,6 +132,11 @@ public:
         {
             UNSUPPORTED("Dynamic offset may only be set for constant buffers.");
         }
+
+        void SetConstants(const void* pConstants, Uint32 FirstConstant, Uint32 NumConstants)
+        {
+            UNSUPPORTED("Inline constants may only be set for constant buffers.");
+        }
     };
 
     struct ConstBuffBindInfo final : ShaderVariableD3D11Base<ConstBuffBindInfo, D3D11_RESOURCE_RANGE_CBV>
@@ -141,6 +148,8 @@ public:
         void BindResource(const BindResourceInfo& BindInfo);
 
         void SetDynamicOffset(Uint32 ArrayIndex, Uint32 Offset);
+
+        void SetConstants(const void* pConstants, Uint32 FirstConstant, Uint32 NumConstants);
     };
 
     struct TexSRVBindInfo final : ShaderVariableD3D11Base<TexSRVBindInfo, D3D11_RESOURCE_RANGE_SRV>
@@ -242,7 +251,7 @@ private:
     ResourceType& GetResource(Uint32 ResIndex) const
     {
         VERIFY(ResIndex < GetNumResources<ResourceType>(), "Resource index (", ResIndex, ") must be less than (", GetNumResources<ResourceType>(), ")");
-        auto Offset = GetResourceOffset<ResourceType>();
+        OffsetType Offset = GetResourceOffset<ResourceType>();
         return reinterpret_cast<ResourceType*>(reinterpret_cast<Uint8*>(m_pVariables) + Offset)[ResIndex];
     }
 
@@ -250,7 +259,7 @@ private:
     const ResourceType& GetConstResource(Uint32 ResIndex) const
     {
         VERIFY(ResIndex < GetNumResources<ResourceType>(), "Resource index (", ResIndex, ") must be less than (", GetNumResources<ResourceType>(), ")");
-        auto Offset = GetResourceOffset<ResourceType>();
+        OffsetType Offset = GetResourceOffset<ResourceType>();
         return reinterpret_cast<const ResourceType*>(reinterpret_cast<const Uint8*>(m_pVariables) + Offset)[ResIndex];
     }
 

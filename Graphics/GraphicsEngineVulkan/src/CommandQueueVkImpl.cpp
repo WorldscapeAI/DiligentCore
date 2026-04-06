@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2022 Diligent Graphics LLC
+ *  Copyright 2019-2025 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,17 +30,17 @@
 
 #include "CommandQueueVkImpl.hpp"
 #include "RenderDeviceVkImpl.hpp"
-#include "VulkanUtilities/VulkanDebug.hpp"
+#include "VulkanUtilities/Debug.hpp"
 
 namespace Diligent
 {
 
-CommandQueueVkImpl::CommandQueueVkImpl(IReferenceCounters*                                   pRefCounters,
-                                       std::shared_ptr<VulkanUtilities::VulkanLogicalDevice> LogicalDevice,
-                                       SoftwareQueueIndex                                    CommandQueueId,
-                                       Uint32                                                NumCommandQueues,
-                                       Uint32                                                vkQueueIndex,
-                                       const ImmediateContextCreateInfo&                     CreateInfo) :
+CommandQueueVkImpl::CommandQueueVkImpl(IReferenceCounters*                             pRefCounters,
+                                       std::shared_ptr<VulkanUtilities::LogicalDevice> LogicalDevice,
+                                       SoftwareQueueIndex                              CommandQueueId,
+                                       Uint32                                          NumCommandQueues,
+                                       Uint32                                          vkQueueIndex,
+                                       const ImmediateContextCreateInfo&               CreateInfo) :
     // clang-format off
     TBase{pRefCounters},
     m_LogicalDevice             {LogicalDevice},
@@ -50,7 +50,7 @@ CommandQueueVkImpl::CommandQueueVkImpl(IReferenceCounters*                      
     m_SupportedTimelineSemaphore{LogicalDevice->GetEnabledExtFeatures().TimelineSemaphore.timelineSemaphore == VK_TRUE},
     m_NumCommandQueues          {static_cast<Uint8>(m_SupportedTimelineSemaphore ? 1u : NumCommandQueues)},
     m_NextFenceValue            {1},
-    m_SyncObjectManager         {std::make_shared<VulkanUtilities::VulkanSyncObjectManager>(*LogicalDevice)},
+    m_SyncObjectManager         {std::make_shared<VulkanUtilities::SyncObjectManager>(*LogicalDevice)},
     m_SyncPointAllocator        {GetRawAllocator(), SyncPointVk::SizeOf(m_NumCommandQueues), 16}
 // clang-format on
 {
@@ -78,11 +78,11 @@ CommandQueueVkImpl::~CommandQueueVkImpl()
     // is called on that device.
 }
 
-SyncPointVk::SyncPointVk(SoftwareQueueIndex                        CommandQueueId,
-                         Uint32                                    NumContexts,
-                         VulkanUtilities::VulkanSyncObjectManager& SyncObjectMngr,
-                         VkDevice                                  LogicalDevice,
-                         Uint64                                    dbgValue) :
+SyncPointVk::SyncPointVk(SoftwareQueueIndex                  CommandQueueId,
+                         Uint32                              NumContexts,
+                         VulkanUtilities::SyncObjectManager& SyncObjectMngr,
+                         VkDevice                            vkDevice,
+                         Uint64                              dbgValue) :
     m_CommandQueueId{CommandQueueId},
     m_NumSemaphores{static_cast<Uint8>(NumContexts)},
     m_Fence{SyncObjectMngr.CreateFence()}
@@ -92,7 +92,7 @@ SyncPointVk::SyncPointVk(SoftwareQueueIndex                        CommandQueueI
 
     // Call constructors for semaphores
     for (Uint32 s = _countof(m_Semaphores); s < NumContexts; ++s)
-        new (&m_Semaphores[s]) VulkanUtilities::VulkanRecycledSemaphore{};
+        new (&m_Semaphores[s]) VulkanUtilities::RecycledSemaphore{};
 
     // Semaphores are used to synchronize between queues; they are not used for synchronization within one queue.
     if (NumContexts > 1)
@@ -105,14 +105,14 @@ SyncPointVk::SyncPointVk(SoftwareQueueIndex                        CommandQueueI
 
 #ifdef DILIGENT_DEBUG
     String Name = String{"Queue ("} + std::to_string(CommandQueueId) + ") Value (" + std::to_string(dbgValue) + ")";
-    VulkanUtilities::SetFenceName(LogicalDevice, m_Fence, Name.c_str());
+    VulkanUtilities::SetFenceName(vkDevice, m_Fence, Name.c_str());
 
     for (Uint32 s = 0; s < m_NumSemaphores; ++s)
     {
         if (m_Semaphores[s])
         {
             Name = String{"Queue ("} + std::to_string(CommandQueueId) + ") Value (" + std::to_string(dbgValue) + ") Ctx (" + std::to_string(s) + ")";
-            VulkanUtilities::SetSemaphoreName(LogicalDevice, m_Semaphores[s], Name.c_str());
+            VulkanUtilities::SetSemaphoreName(vkDevice, m_Semaphores[s], Name.c_str());
         }
     }
 #endif
@@ -136,9 +136,9 @@ __forceinline void SyncPointVk::GetSemaphores(std::vector<VkSemaphore>& Semaphor
 
 __forceinline SyncPointVkPtr CommandQueueVkImpl::CreateSyncPoint(Uint64 dbgValue)
 {
-    auto* pAllocator = &m_SyncPointAllocator;
-    void* ptr        = pAllocator->Allocate(SyncPointVk::SizeOf(m_NumCommandQueues), "SyncPointVk", __FILE__, __LINE__);
-    auto  Deleter    = [pAllocator](SyncPointVk* ptr) //
+    FixedBlockMemoryAllocator* pAllocator = &m_SyncPointAllocator;
+    void*                      ptr        = pAllocator->Allocate(SyncPointVk::SizeOf(m_NumCommandQueues), "SyncPointVk", __FILE__, __LINE__);
+    auto                       Deleter    = [pAllocator](SyncPointVk* ptr) //
     {
         ptr->~SyncPointVk();
         pAllocator->Free(ptr);
@@ -154,7 +154,7 @@ Uint64 CommandQueueVkImpl::Submit(const VkSubmitInfo& InSubmitInfo)
     // Increment the value before submitting the buffer to be overly safe
     const uint64_t FenceValue = m_NextFenceValue.fetch_add(1);
 
-    auto NewSyncPoint = CreateSyncPoint(FenceValue);
+    SyncPointVkPtr NewSyncPoint = CreateSyncPoint(FenceValue);
 
     m_TempSignalSemaphores.clear();
     NewSyncPoint->GetSemaphores(m_TempSignalSemaphores);
@@ -186,7 +186,7 @@ Uint64 CommandQueueVkImpl::Submit(const VkSubmitInfo& InSubmitInfo)
         1 :
         0;
 
-    auto err = vkQueueSubmit(m_VkQueue, SubmitCount, &SubmitInfo, NewSyncPoint->GetFence());
+    VkResult err = vkQueueSubmit(m_VkQueue, SubmitCount, &SubmitInfo, NewSyncPoint->GetFence());
     DEV_CHECK_ERR(err == VK_SUCCESS, "Failed to submit command buffer to the command queue");
     (void)err;
 
@@ -226,7 +226,7 @@ Uint64 CommandQueueVkImpl::WaitForIdle()
     std::lock_guard<std::mutex> QueueGuard{m_QueueMutex};
 
     // Update last completed fence value to unlock all waiting events.
-    const auto FenceValue = m_NextFenceValue.fetch_add(1);
+    const Uint64 FenceValue = m_NextFenceValue.fetch_add(1);
 
     vkQueueWaitIdle(m_VkQueue);
     // For some reason after idling the queue not all fences are signaled
@@ -247,7 +247,7 @@ void CommandQueueVkImpl::EnqueueSignalFence(VkFence vkFence)
 
     std::lock_guard<std::mutex> QueueGuard{m_QueueMutex};
 
-    auto err = vkQueueSubmit(m_VkQueue, 0, nullptr, vkFence);
+    VkResult err = vkQueueSubmit(m_VkQueue, 0, nullptr, vkFence);
     DEV_CHECK_ERR(err == VK_SUCCESS, "Failed to submit fence signal command to the command queue");
     (void)err;
 }
@@ -279,7 +279,7 @@ void CommandQueueVkImpl::InternalSignalSemaphore(VkSemaphore vkTimelineSemaphore
     SubmitInfo.signalSemaphoreCount = 1;
     SubmitInfo.pSignalSemaphores    = &vkTimelineSemaphore;
 
-    auto err = vkQueueSubmit(m_VkQueue, 1, &SubmitInfo, VK_NULL_HANDLE);
+    VkResult err = vkQueueSubmit(m_VkQueue, 1, &SubmitInfo, VK_NULL_HANDLE);
     DEV_CHECK_ERR(err == VK_SUCCESS, "Failed to submit timeline semaphore signal command to the command queue");
     (void)err;
 }
@@ -297,7 +297,7 @@ Uint64 CommandQueueVkImpl::BindSparse(const VkBindSparseInfo& InBindInfo)
     // Increment the value before submitting the buffer to be overly safe
     const uint64_t FenceValue = m_NextFenceValue.fetch_add(1);
 
-    auto NewSyncPoint = CreateSyncPoint(FenceValue);
+    SyncPointVkPtr NewSyncPoint = CreateSyncPoint(FenceValue);
 
     m_TempSignalSemaphores.clear();
     NewSyncPoint->GetSemaphores(m_TempSignalSemaphores);
@@ -322,7 +322,7 @@ Uint64 CommandQueueVkImpl::BindSparse(const VkBindSparseInfo& InBindInfo)
     BindInfo.signalSemaphoreCount = static_cast<Uint32>(m_TempSignalSemaphores.size());
     BindInfo.pSignalSemaphores    = m_TempSignalSemaphores.data();
 
-    auto err = vkQueueBindSparse(m_VkQueue, 1, &BindInfo, NewSyncPoint->GetFence());
+    VkResult err = vkQueueBindSparse(m_VkQueue, 1, &BindInfo, NewSyncPoint->GetFence());
     DEV_CHECK_ERR(err == VK_SUCCESS, "Failed to submit sparse bind commands to the command queue");
     (void)err;
 

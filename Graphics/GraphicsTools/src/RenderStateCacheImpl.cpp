@@ -39,7 +39,6 @@
 #include "Archiver.h"
 #include "Dearchiver.h"
 #include "ArchiverFactory.h"
-#include "ArchiverFactoryLoader.h"
 
 #include "PipelineStateBase.hpp"
 #include "RefCntAutoPtr.hpp"
@@ -49,6 +48,7 @@
 #include "GraphicsAccessories.hpp"
 #include "GraphicsUtilities.h"
 #include "ShaderSourceFactoryUtils.hpp"
+#include "DXCompiler.hpp"
 
 namespace Diligent
 {
@@ -126,7 +126,7 @@ std::string RenderStateCacheImpl::HashToStr(Uint64 Low, Uint64 High)
     static constexpr std::array<char, 16> Symbols = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
 
     std::string Str;
-    for (auto Part : {High, Low})
+    for (Uint64 Part : {High, Low})
     {
         for (Uint64 i = 0; i < 16; ++i)
             Str += Symbols[(Part >> (Uint64{60} - i * 4)) & 0xFu];
@@ -144,13 +144,25 @@ std::string RenderStateCacheImpl::MakeHashStr(const char* Name, const XXH128Hash
 }
 
 
-static size_t ComputeDeviceAttribsHash(IRenderDevice* pDevice)
+static void ComputeDeviceAttribsHash(XXH128State& Hasher, IRenderDevice* pDevice)
 {
-    if (pDevice == nullptr)
-        return 0;
+    if (pDevice != nullptr)
+    {
+        const RenderDeviceInfo& DeviceInfo = pDevice->GetDeviceInfo();
+        Hasher.Update(DeviceInfo.Type, DeviceInfo.NDC.MinZ, DeviceInfo.Features.SeparablePrograms);
+    }
+}
 
-    const RenderDeviceInfo& DeviceInfo = pDevice->GetDeviceInfo();
-    return ComputeHash(DeviceInfo.Type, DeviceInfo.NDC.MinZ, DeviceInfo.Features.SeparablePrograms);
+static const char* GetDXCompilerLibName(IRenderDevice* pDevice)
+{
+    if (IDXCompiler* pDXCompiler = GetDeviceDXCompiler(pDevice))
+    {
+        return pDXCompiler->GetLibraryName().c_str();
+    }
+    else
+    {
+        return nullptr;
+    }
 }
 
 RenderStateCacheImpl::RenderStateCacheImpl(IReferenceCounters*               pRefCounters,
@@ -159,25 +171,24 @@ RenderStateCacheImpl::RenderStateCacheImpl(IReferenceCounters*               pRe
     // clang-format off
     m_pDevice      {CreateInfo.pDevice},
     m_DeviceType   {CreateInfo.pDevice != nullptr ? CreateInfo.pDevice->GetDeviceInfo().Type : RENDER_DEVICE_TYPE_UNDEFINED},
-    m_DeviceHash   {ComputeDeviceAttribsHash(CreateInfo.pDevice)},
     m_CI           {CreateInfo},
     m_pReloadSource{CreateInfo.pReloadSource}
 // clang-format on
 {
     if (CreateInfo.pDevice == nullptr)
-        LOG_ERROR_AND_THROW("CreateInfo.pDevice must not be null");
-
-    IArchiverFactory* pArchiverFactory = nullptr;
-#if EXPLICITLY_LOAD_ARCHIVER_FACTORY_DLL
-    auto GetArchiverFactory = LoadArchiverFactory();
-    if (GetArchiverFactory != nullptr)
     {
-        pArchiverFactory = GetArchiverFactory();
+        LOG_ERROR_AND_THROW("CreateInfo.pDevice must not be null");
     }
-#else
-    pArchiverFactory       = GetArchiverFactory();
-#endif
-    VERIFY_EXPR(pArchiverFactory != nullptr);
+
+    if (CreateInfo.pArchiverFactory == nullptr)
+    {
+        LOG_ERROR_AND_THROW("CreateInfo.pArchiverFactory must not be null. Use LoadAndGetArchiverFactory() from ArchiverFactoryLoader.h to create the factory.");
+    }
+
+    if (CreateInfo.FileHashMode == RENDER_STATE_CACHE_FILE_HASH_MODE_BY_NAME && CreateInfo.EnableHotReload)
+    {
+        LOG_WARNING_MESSAGE("Hot reloading is not compatible with by-name file hashing. Use by-content hashing instead.");
+    }
 
     SerializationDeviceCreateInfo SerializationDeviceCI;
     SerializationDeviceCI.DeviceInfo                        = m_pDevice->GetDeviceInfo();
@@ -191,7 +202,8 @@ RenderStateCacheImpl::RenderStateCacheImpl(IReferenceCounters*               pRe
             break;
 
         case RENDER_DEVICE_TYPE_D3D12:
-            SerializationDeviceCI.D3D12.ShaderVersion = SerializationDeviceCI.DeviceInfo.MaxShaderVersion.HLSL;
+            SerializationDeviceCI.D3D12.ShaderVersion  = SerializationDeviceCI.DeviceInfo.MaxShaderVersion.HLSL;
+            SerializationDeviceCI.D3D12.DxCompilerPath = GetDXCompilerLibName(m_pDevice);
             break;
 
         case RENDER_DEVICE_TYPE_GL:
@@ -201,7 +213,8 @@ RenderStateCacheImpl::RenderStateCacheImpl(IReferenceCounters*               pRe
             break;
 
         case RENDER_DEVICE_TYPE_VULKAN:
-            SerializationDeviceCI.Vulkan.ApiVersion = SerializationDeviceCI.DeviceInfo.APIVersion;
+            SerializationDeviceCI.Vulkan.ApiVersion     = SerializationDeviceCI.DeviceInfo.APIVersion;
+            SerializationDeviceCI.Vulkan.DxCompilerPath = GetDXCompilerLibName(m_pDevice);
             break;
 
         case RENDER_DEVICE_TYPE_METAL:
@@ -214,13 +227,13 @@ RenderStateCacheImpl::RenderStateCacheImpl(IReferenceCounters*               pRe
             UNEXPECTED("Unknown device type");
     }
 
-    pArchiverFactory->CreateSerializationDevice(SerializationDeviceCI, &m_pSerializationDevice);
+    CreateInfo.pArchiverFactory->CreateSerializationDevice(SerializationDeviceCI, &m_pSerializationDevice);
     if (!m_pSerializationDevice)
         LOG_ERROR_AND_THROW("Failed to create serialization device");
 
     m_pSerializationDevice->AddRenderDevice(m_pDevice);
 
-    pArchiverFactory->CreateArchiver(m_pSerializationDevice, &m_pArchiver);
+    CreateInfo.pArchiverFactory->CreateArchiver(m_pSerializationDevice, &m_pArchiver);
     if (!m_pArchiver)
         LOG_ERROR_AND_THROW("Failed to create archiver");
 
@@ -253,7 +266,7 @@ bool RenderStateCacheImpl::CreateShader(const ShaderCreateInfo& ShaderCI,
 
     RefCntAutoPtr<IShader> pShader;
 
-    const auto FoundInCache = CreateShaderInternal(ShaderCI, &pShader);
+    const bool FoundInCache = CreateShaderInternal(ShaderCI, &pShader);
     if (!pShader)
         return false;
 
@@ -266,7 +279,7 @@ bool RenderStateCacheImpl::CreateShader(const ShaderCreateInfo& ShaderCI,
             auto it = m_ReloadableShaders.find(pShader->GetUniqueID());
             if (it != m_ReloadableShaders.end())
             {
-                if (auto pReloadableShader = it->second.Lock())
+                if (RefCntAutoPtr<IShader> pReloadableShader = it->second.Lock())
                     *ppShader = pReloadableShader.Detach();
                 else
                     m_ReloadableShaders.erase(it);
@@ -275,7 +288,7 @@ bool RenderStateCacheImpl::CreateShader(const ShaderCreateInfo& ShaderCI,
 
         if (*ppShader == nullptr)
         {
-            auto _ShaderCI = ShaderCI;
+            ShaderCreateInfo _ShaderCI = ShaderCI;
 
             RefCntAutoPtr<IShaderSourceInputStreamFactory> pCompoundReloadSource;
             if (m_pReloadSource)
@@ -307,6 +320,24 @@ bool RenderStateCacheImpl::CreateShader(const ShaderCreateInfo& ShaderCI,
     return FoundInCache;
 }
 
+static void HashShaderCIByFileName(XXH128State& Hasher, const ShaderCreateInfo& ShaderCI)
+{
+    ShaderCreateInfo HashCI = ShaderCI;
+    HashCI.FilePath         = nullptr;
+    HashCI.Source           = nullptr;
+    Hasher.Update(HashCI);
+    if (ShaderCI.FilePath != nullptr)
+    {
+        // Hash only the file path
+        Hasher.UpdateStr(ShaderCI.FilePath);
+    }
+    else if (ShaderCI.Source != nullptr)
+    {
+        // Hash the source as raw string ignoring any include directives
+        Hasher.UpdateStr(ShaderCI.Source, ShaderCI.SourceLength);
+    }
+}
+
 bool RenderStateCacheImpl::CreateShaderInternal(const ShaderCreateInfo& ShaderCI,
                                                 IShader**               ppShader)
 {
@@ -318,8 +349,21 @@ bool RenderStateCacheImpl::CreateShaderInternal(const ShaderCreateInfo& ShaderCI
 #else
     constexpr bool IsDebug = false;
 #endif
-    Hasher.Update(ShaderCI, m_DeviceHash, IsDebug);
-    const auto Hash = Hasher.Digest();
+    ComputeDeviceAttribsHash(Hasher, m_pDevice);
+    if (m_CI.FileHashMode == RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT)
+    {
+        Hasher.Update(ShaderCI);
+    }
+    else if (m_CI.FileHashMode == RENDER_STATE_CACHE_FILE_HASH_MODE_BY_NAME)
+    {
+        HashShaderCIByFileName(Hasher, ShaderCI);
+    }
+    else
+    {
+        UNEXPECTED("Unexpected file hash mode");
+    }
+    Hasher.Update(IsDebug);
+    const XXH128Hash Hash = Hasher.Digest();
 
     // First, try to check if the shader has already been requested
     {
@@ -328,7 +372,7 @@ bool RenderStateCacheImpl::CreateShaderInternal(const ShaderCreateInfo& ShaderCI
         auto it = m_Shaders.find(Hash);
         if (it != m_Shaders.end())
         {
-            if (auto pShader = it->second.Lock())
+            if (RefCntAutoPtr<IShader> pShader = it->second.Lock())
             {
                 *ppShader = pShader.Detach();
                 RENDER_STATE_CACHE_LOG(RENDER_STATE_CACHE_LOG_LEVEL_VERBOSE, "Reusing existing shader '", (ShaderCI.Desc.Name ? ShaderCI.Desc.Name : ""), "'.");
@@ -367,7 +411,7 @@ bool RenderStateCacheImpl::CreateShaderInternal(const ShaderCreateInfo& ShaderCI
     };
     AddShaderHelper AutoAddShader{*this, Hash, ppShader};
 
-    const auto HashStr = MakeHashStr(ShaderCI.Desc.Name, Hash);
+    const std::string HashStr = MakeHashStr(ShaderCI.Desc.Name, Hash);
 
     // Try to find the shader in the loaded archive
     {
@@ -402,11 +446,11 @@ bool RenderStateCacheImpl::CreateShaderInternal(const ShaderCreateInfo& ShaderCI
 
     // Next, try to find the shader in the archiver
     RefCntAutoPtr<IShader> pArchivedShader{m_pArchiver->GetShader(HashStr.c_str())};
-    const auto             FoundInArchive = (pArchivedShader != nullptr);
+    const bool             FoundInArchive = (pArchivedShader != nullptr);
     if (!pArchivedShader)
     {
-        auto ArchiveShaderCI      = ShaderCI;
-        ArchiveShaderCI.Desc.Name = HashStr.c_str();
+        ShaderCreateInfo ArchiveShaderCI = ShaderCI;
+        ArchiveShaderCI.Desc.Name        = HashStr.c_str();
         ShaderArchiveInfo ArchiveInfo;
         ArchiveInfo.DeviceFlags = RenderDeviceTypeToArchiveDataFlag(m_DeviceType);
         m_pSerializationDevice->CreateShader(ArchiveShaderCI, ArchiveInfo, &pArchivedShader);
@@ -466,17 +510,17 @@ struct RenderStateCacheImpl::SerializedPsoCIWrapperBase
         // Replace signatures with serialized signatures
         for (size_t i = 0; i < ppSignatures.size(); ++i)
         {
-            auto& pSign = ppSignatures[i];
+            IPipelineResourceSignature*& pSign = ppSignatures[i];
             if (pSign == nullptr)
                 continue;
 
-            auto SignDesc = pSign->GetDesc();
+            PipelineResourceSignatureDesc SignDesc = pSign->GetDesc();
             // Add hash to the signature name
             XXH128State Hasher;
             Hasher.Update(SignDesc, DeviceType);
-            const auto Hash    = Hasher.Digest();
-            const auto HashStr = MakeHashStr(SignDesc.Name, Hash);
-            SignDesc.Name      = HashStr.c_str();
+            const XXH128Hash  Hash    = Hasher.Digest();
+            const std::string HashStr = MakeHashStr(SignDesc.Name, Hash);
+            SignDesc.Name             = HashStr.c_str();
 
             ResourceSignatureArchiveInfo ArchiveInfo;
             ArchiveInfo.DeviceFlags = RenderDeviceTypeToArchiveDataFlag(DeviceType);
@@ -597,13 +641,13 @@ struct RenderStateCacheImpl::SerializedPsoCIWrapper<GraphicsPipelineStateCreateI
         // Replace render pass with serialized render pass
         if (CI.GraphicsPipeline.pRenderPass != nullptr)
         {
-            auto RPDesc = CI.GraphicsPipeline.pRenderPass->GetDesc();
+            RenderPassDesc RPDesc = CI.GraphicsPipeline.pRenderPass->GetDesc();
             // Add hash to the render pass name
             XXH128State Hasher;
             Hasher.Update(RPDesc, DeviceType);
-            const auto Hash    = Hasher.Digest();
-            const auto HashStr = MakeHashStr(RPDesc.Name, Hash);
-            RPDesc.Name        = HashStr.c_str();
+            const XXH128Hash  Hash    = Hasher.Digest();
+            const std::string HashStr = MakeHashStr(RPDesc.Name, Hash);
+            RPDesc.Name               = HashStr.c_str();
 
             RefCntAutoPtr<IRenderPass> pSerializedRP;
             pSerializationDevice->CreateRenderPass(RPDesc, &pSerializedRP);
@@ -683,7 +727,7 @@ void CreateRenderStateCache(const RenderStateCacheCreateInfo& CreateInfo,
     {
         RefCntAutoPtr<IRenderStateCache> pCache{MakeNewRCObj<RenderStateCacheImpl>()(CreateInfo)};
         if (pCache)
-            pCache->QueryInterface(IID_RenderStateCache, reinterpret_cast<IObject**>(ppCache));
+            pCache->QueryInterface(IID_RenderStateCache, ppCache);
     }
     catch (...)
     {
@@ -706,7 +750,7 @@ bool RenderStateCacheImpl::CreatePipelineState(const CreateInfoType& PSOCreateIn
 
     RefCntAutoPtr<IPipelineState> pPSO;
 
-    const auto FoundInCache = CreatePipelineStateInternal(PSOCreateInfo, &pPSO);
+    const bool FoundInCache = CreatePipelineStateInternal(PSOCreateInfo, &pPSO);
     if (!pPSO)
         return false;
 
@@ -718,7 +762,7 @@ bool RenderStateCacheImpl::CreatePipelineState(const CreateInfoType& PSOCreateIn
             auto it = m_ReloadablePipelines.find(pPSO->GetUniqueID());
             if (it != m_ReloadablePipelines.end())
             {
-                if (auto pReloadablePSO = it->second.Lock())
+                if (RefCntAutoPtr<IPipelineState> pReloadablePSO = it->second.Lock())
                     *ppPipelineState = pReloadablePSO.Detach();
                 else
                     m_ReloadablePipelines.erase(it);
@@ -765,7 +809,8 @@ bool RenderStateCacheImpl::CreatePipelineStateInternal(const CreateInfoType& PSO
     }
 
     XXH128State Hasher;
-    Hasher.Update(PSOCreateInfo, m_DeviceHash);
+    ComputeDeviceAttribsHash(Hasher, m_pDevice);
+    Hasher.Update(PSOCreateInfo);
     const auto Hash = Hasher.Digest();
 
     // First, try to check if the PSO has already been requested
@@ -775,7 +820,7 @@ bool RenderStateCacheImpl::CreatePipelineStateInternal(const CreateInfoType& PSO
         auto it = m_Pipelines.find(Hash);
         if (it != m_Pipelines.end())
         {
-            if (auto pPSO = it->second.Lock())
+            if (RefCntAutoPtr<IPipelineState> pPSO = it->second.Lock())
             {
                 *ppPipelineState = pPSO.Detach();
                 RENDER_STATE_CACHE_LOG(RENDER_STATE_CACHE_LOG_LEVEL_VERBOSE, "Reusing existing pipeline '", (PSOCreateInfo.PSODesc.Name ? PSOCreateInfo.PSODesc.Name : ""), "'.");
@@ -788,7 +833,7 @@ bool RenderStateCacheImpl::CreatePipelineStateInternal(const CreateInfoType& PSO
         }
     }
 
-    const auto HashStr = MakeHashStr(PSOCreateInfo.PSODesc.Name, Hash);
+    const std::string HashStr = MakeHashStr(PSOCreateInfo.PSODesc.Name, Hash);
 
     bool FoundInCache = false;
     // Try to find PSO in the loaded archive
@@ -902,7 +947,7 @@ Uint32 RenderStateCacheImpl::Reload(ReloadGraphicsPipelineCallbackType ReloadGra
         std::lock_guard<std::mutex> Guard{m_ReloadableShadersMtx};
         for (auto shader_it : m_ReloadableShaders)
         {
-            if (auto pShader = shader_it.second.Lock())
+            if (RefCntAutoPtr<IShader> pShader = shader_it.second.Lock())
             {
                 RefCntAutoPtr<ReloadableShader> pReloadableShader{pShader, ReloadableShader::IID_InternalImpl};
                 if (pReloadableShader)
@@ -925,7 +970,7 @@ Uint32 RenderStateCacheImpl::Reload(ReloadGraphicsPipelineCallbackType ReloadGra
         std::lock_guard<std::mutex> Guard{m_ReloadablePipelinesMtx};
         for (auto pso_it : m_ReloadablePipelines)
         {
-            if (auto pPSO = pso_it.second.Lock())
+            if (RefCntAutoPtr<IPipelineState> pPSO = pso_it.second.Lock())
             {
                 RefCntAutoPtr<ReloadablePipelineState> pReloadablePSO{pPSO, ReloadablePipelineState::IID_InternalImpl};
                 if (pPSO)

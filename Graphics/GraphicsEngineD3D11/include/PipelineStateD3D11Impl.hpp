@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,7 +31,7 @@
 /// Declaration of Diligent::PipelineStateD3D11Impl class
 
 #include "EngineD3D11ImplTraits.hpp"
-#include "PipelineStateBase.hpp"
+#include "PipelineStateD3DBase.hpp"
 
 #include "PipelineResourceSignatureD3D11Impl.hpp" // Required by PipelineStateBase
 #include "ShaderD3D11Impl.hpp"
@@ -40,10 +40,11 @@ namespace Diligent
 {
 
 /// Pipeline state object implementation in Direct3D11 backend.
-class PipelineStateD3D11Impl final : public PipelineStateBase<EngineD3D11ImplTraits>
+class PipelineStateD3D11Impl final : public PipelineStateD3DBase<EngineD3D11ImplTraits>
 {
 public:
-    using TPipelineStateBase = PipelineStateBase<EngineD3D11ImplTraits>;
+    using TPipelineStateBase    = PipelineStateBase<EngineD3D11ImplTraits>;
+    using TPipelineStateD3DBase = PipelineStateD3DBase<EngineD3D11ImplTraits>;
 
     static constexpr INTERFACE_ID IID_InternalImpl =
         {0xe432f9ec, 0xe60e, 0x4e14, {0xbc, 0xe0, 0x18, 0x81, 0x2f, 0x52, 0x32, 0x43}};
@@ -56,7 +57,7 @@ public:
                            const ComputePipelineStateCreateInfo& CreateInfo);
     ~PipelineStateD3D11Impl();
 
-    virtual void DILIGENT_CALL_TYPE QueryInterface(const INTERFACE_ID& IID, IObject** ppInterface) override final;
+    IMPLEMENT_QUERY_INTERFACE2_IN_PLACE(IID_PipelineStateD3D11, IID_InternalImpl, TPipelineStateD3DBase)
 
     /// Implementation of IPipelineState::IsCompatibleWith() in Direct3D11 backend.
     virtual bool DILIGENT_CALL_TYPE IsCompatibleWith(const IPipelineState* pPSO) const override final;
@@ -152,7 +153,7 @@ private:
     template <typename D3D11ShaderType>
     D3D11ShaderType* GetD3D11Shader(Uint32 ShaderInd)
     {
-        auto idx = m_ShaderIndices[ShaderInd];
+        Int8 idx = m_ShaderIndices[ShaderInd];
         return idx >= 0 ? static_cast<D3D11ShaderType*>(m_ppd3d11Shaders[idx].p) : nullptr;
     }
 

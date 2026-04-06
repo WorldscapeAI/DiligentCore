@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -174,9 +174,10 @@ public:
     virtual void DILIGENT_CALL_TYPE CreateDeferredContext(IDeviceContext** ppContext) override final;
 
     /// Implementation of IRenderDevice::GetSparseTextureFormatInfo() in Direct3D12 backend.
-    virtual SparseTextureFormatInfo DILIGENT_CALL_TYPE GetSparseTextureFormatInfo(TEXTURE_FORMAT     TexFormat,
-                                                                                  RESOURCE_DIMENSION Dimension,
-                                                                                  Uint32             SampleCount) const override final;
+    virtual Bool DILIGENT_CALL_TYPE GetSparseTextureFormatInfo(TEXTURE_FORMAT           TexFormat,
+                                                               RESOURCE_DIMENSION       Dimension,
+                                                               Uint32                   SampleCount,
+                                                               SparseTextureFormatInfo& FormatInfo) const override final;
 
     /// Implementation of IRenderDeviceD3D12::GetD3D12Device().
     virtual ID3D12Device* DILIGENT_CALL_TYPE GetD3D12Device() const override final { return m_pd3d12Device; }
@@ -203,6 +204,12 @@ public:
                                                               const TopLevelASDesc& Desc,
                                                               RESOURCE_STATE        InitialState,
                                                               ITopLevelAS**         ppTLAS) override final;
+
+    /// Implementation of IRenderDeviceD3D12::GetDXCompiler().
+    virtual IDXCompiler* DILIGENT_CALL_TYPE GetDXCompiler() const override final
+    {
+        return m_pDxCompiler.get();
+    }
 
     void CreateRootSignature(const RefCntAutoPtr<class PipelineResourceSignatureD3D12Impl>* ppSignatures, Uint32 SignatureCount, size_t Hash, RootSignatureD3D12** ppRootSig);
 

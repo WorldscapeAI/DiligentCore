@@ -45,7 +45,7 @@ SwapChainVkImpl::SwapChainVkImpl(IReferenceCounters*  pRefCounters,
     // clang-format off
     TSwapChainBase               {pRefCounters, pRenderDeviceVk, pDeviceContextVk, SCDesc},
     m_Window                     {Window},
-    m_VulkanInstance             {pRenderDeviceVk->GetVulkanInstance()},
+    m_Instance             {pRenderDeviceVk->GetInstance()},
     m_DesiredBufferCount         {SCDesc.BufferCount},
     m_pBackBufferRTV             (STD_ALLOCATOR_RAW_MEM(RefCntAutoPtr<ITextureView>, GetRawAllocator(), "Allocator for vector<RefCntAutoPtr<ITextureView>>")),
     m_SwapChainImagesInitialized (STD_ALLOCATOR_RAW_MEM(bool, GetRawAllocator(), "Allocator for vector<bool>"))
@@ -54,9 +54,10 @@ SwapChainVkImpl::SwapChainVkImpl(IReferenceCounters*  pRefCounters,
     CreateSurface();
     CreateVulkanSwapChain();
     InitBuffersAndViews();
-    VkResult res = AcquireNextImage(pDeviceContextVk);
-    DEV_CHECK_ERR(res == VK_SUCCESS, "Failed to acquire next image for the newly created swap chain");
-    (void)res;
+
+    AcquireNextImage(pDeviceContextVk);
+    // Note that the image may be immediately out of date.
+    // https://github.com/DiligentGraphics/DiligentCore/issues/632
 
     FenceDesc FenceCI;
     FenceCI.Name = "Swap chain frame complete fence";
@@ -67,7 +68,7 @@ void SwapChainVkImpl::CreateSurface()
 {
     if (m_VkSurface != VK_NULL_HANDLE)
     {
-        vkDestroySurfaceKHR(m_VulkanInstance->GetVkInstance(), m_VkSurface, NULL);
+        vkDestroySurfaceKHR(m_Instance->GetVkInstance(), m_VkSurface, NULL);
         m_VkSurface = VK_NULL_HANDLE;
     }
 
@@ -81,7 +82,7 @@ void SwapChainVkImpl::CreateSurface()
         surfaceCreateInfo.hinstance = GetModuleHandle(NULL);
         surfaceCreateInfo.hwnd      = (HWND)m_Window.hWnd;
 
-        err = vkCreateWin32SurfaceKHR(m_VulkanInstance->GetVkInstance(), &surfaceCreateInfo, nullptr, &m_VkSurface);
+        err = vkCreateWin32SurfaceKHR(m_Instance->GetVkInstance(), &surfaceCreateInfo, nullptr, &m_VkSurface);
     }
 #elif defined(VK_USE_PLATFORM_ANDROID_KHR)
     if (m_Window.pAWindow != nullptr)
@@ -90,7 +91,7 @@ void SwapChainVkImpl::CreateSurface()
         surfaceCreateInfo.sType  = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
         surfaceCreateInfo.window = (ANativeWindow*)m_Window.pAWindow;
 
-        err = vkCreateAndroidSurfaceKHR(m_VulkanInstance->GetVkInstance(), &surfaceCreateInfo, NULL, &m_VkSurface);
+        err = vkCreateAndroidSurfaceKHR(m_Instance->GetVkInstance(), &surfaceCreateInfo, NULL, &m_VkSurface);
     }
 #elif defined(VK_USE_PLATFORM_METAL_EXT)
     if (void* pLayer = m_Window.GetLayer())
@@ -99,29 +100,19 @@ void SwapChainVkImpl::CreateSurface()
         surfaceCreateInfo.sType  = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
         surfaceCreateInfo.pLayer = pLayer;
 
-        err = vkCreateMetalSurfaceEXT(m_VulkanInstance->GetVkInstance(), &surfaceCreateInfo, NULL, &m_VkSurface);
+        err = vkCreateMetalSurfaceEXT(m_Instance->GetVkInstance(), &surfaceCreateInfo, NULL, &m_VkSurface);
     }
-#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-    if (m_Window.pDisplay != nullptr)
-    {
-        VkWaylandSurfaceCreateInfoKHR surfaceCreateInfo{};
-        surfaceCreateInfo.sType   = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
-        surfaceCreateInfo.display = reinterpret_cast<struct wl_display*>(m_Window.pDisplay);
-        surfaceCreateInfo.Surface = reinterpret_cast<struct wl_surface*>(nullptr);
-
-        err = vkCreateWaylandSurfaceKHR(m_VulkanInstance->GetVkInstance(), &surfaceCreateInfo, nullptr, &m_VkSurface);
-    }
-#elif defined(VK_USE_PLATFORM_XCB_KHR) || defined(VK_USE_PLATFORM_XLIB_KHR)
+#elif defined(VK_USE_PLATFORM_XCB_KHR) || defined(VK_USE_PLATFORM_XLIB_KHR) || defined(VK_USE_PLATFORM_WAYLAND_KHR)
 
 #    if defined(VK_USE_PLATFORM_XCB_KHR)
     if (m_Window.pXCBConnection != nullptr && m_Window.WindowId != 0)
     {
         VkXcbSurfaceCreateInfoKHR surfaceCreateInfo{};
         surfaceCreateInfo.sType      = VK_STRUCTURE_TYPE_XCB_SURFACE_CREATE_INFO_KHR;
-        surfaceCreateInfo.connection = reinterpret_cast<xcb_connection_t*>(m_Window.pXCBConnection);
+        surfaceCreateInfo.connection = static_cast<xcb_connection_t*>(m_Window.pXCBConnection);
         surfaceCreateInfo.window     = m_Window.WindowId;
 
-        err = vkCreateXcbSurfaceKHR(m_VulkanInstance->GetVkInstance(), &surfaceCreateInfo, nullptr, &m_VkSurface);
+        err = vkCreateXcbSurfaceKHR(m_Instance->GetVkInstance(), &surfaceCreateInfo, nullptr, &m_VkSurface);
     }
 #    endif
 
@@ -130,23 +121,34 @@ void SwapChainVkImpl::CreateSurface()
     {
         VkXlibSurfaceCreateInfoKHR surfaceCreateInfo{};
         surfaceCreateInfo.sType  = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
-        surfaceCreateInfo.dpy    = reinterpret_cast<Display*>(m_Window.pDisplay);
+        surfaceCreateInfo.dpy    = static_cast<Display*>(m_Window.pDisplay);
         surfaceCreateInfo.window = m_Window.WindowId;
 
-        err = vkCreateXlibSurfaceKHR(m_VulkanInstance->GetVkInstance(), &surfaceCreateInfo, nullptr, &m_VkSurface);
+        err = vkCreateXlibSurfaceKHR(m_Instance->GetVkInstance(), &surfaceCreateInfo, nullptr, &m_VkSurface);
     }
 #    endif
 
+#    if defined(VK_USE_PLATFORM_WAYLAND_KHR)
+    if ((m_Window.pDisplay != nullptr && m_Window.pWaylandSurface != nullptr) && m_VkSurface == VK_NULL_HANDLE)
+    {
+        VkWaylandSurfaceCreateInfoKHR surfaceCreateInfo{};
+        surfaceCreateInfo.sType   = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR;
+        surfaceCreateInfo.display = static_cast<struct wl_display*>(m_Window.pDisplay);
+        surfaceCreateInfo.surface = static_cast<struct wl_surface*>(m_Window.pWaylandSurface);
+
+        err = vkCreateWaylandSurfaceKHR(m_Instance->GetVkInstance(), &surfaceCreateInfo, nullptr, &m_VkSurface);
+    }
+#    endif
 #endif
 
     CHECK_VK_ERROR_AND_THROW(err, "Failed to create OS-specific surface");
 
     if (RefCntAutoPtr<IDeviceContext> pContext = m_wpDeviceContext.Lock())
     {
-        RenderDeviceVkImpl*                          pRenderDeviceVk = m_pRenderDevice.RawPtr<RenderDeviceVkImpl>();
-        const VulkanUtilities::VulkanPhysicalDevice& PhysicalDevice  = pRenderDeviceVk->GetPhysicalDevice();
-        const ICommandQueueVk&                       CmdQueueVK      = pRenderDeviceVk->GetCommandQueue(pContext.RawPtr<DeviceContextVkImpl>()->GetCommandQueueId());
-        HardwareQueueIndex                           QueueFamilyIndex{CmdQueueVK.GetQueueFamilyIndex()};
+        RenderDeviceVkImpl*                    pRenderDeviceVk = m_pRenderDevice.RawPtr<RenderDeviceVkImpl>();
+        const VulkanUtilities::PhysicalDevice& PhysicalDevice  = pRenderDeviceVk->GetPhysicalDevice();
+        const ICommandQueueVk&                 CmdQueueVK      = pRenderDeviceVk->GetCommandQueue(pContext.RawPtr<DeviceContextVkImpl>()->GetCommandQueueId());
+        HardwareQueueIndex                     QueueFamilyIndex{CmdQueueVK.GetQueueFamilyIndex()};
         if (!PhysicalDevice.CheckPresentSupport(QueueFamilyIndex, m_VkSurface))
         {
             LOG_ERROR_AND_THROW("Selected physical device does not support present capability.\n"
@@ -162,9 +164,9 @@ void SwapChainVkImpl::CreateSurface()
 
 void SwapChainVkImpl::CreateVulkanSwapChain()
 {
-    RenderDeviceVkImpl*                          pRenderDeviceVk = m_pRenderDevice.RawPtr<RenderDeviceVkImpl>();
-    const VulkanUtilities::VulkanPhysicalDevice& PhysicalDevice  = pRenderDeviceVk->GetPhysicalDevice();
-    VkPhysicalDevice                             vkDeviceHandle  = PhysicalDevice.GetVkDeviceHandle();
+    RenderDeviceVkImpl*                    pRenderDeviceVk = m_pRenderDevice.RawPtr<RenderDeviceVkImpl>();
+    const VulkanUtilities::PhysicalDevice& PhysicalDevice  = pRenderDeviceVk->GetPhysicalDevice();
+    VkPhysicalDevice                       vkDeviceHandle  = PhysicalDevice.GetVkDeviceHandle();
     // Get the list of VkFormats that are supported:
     uint32_t formatCount = 0;
 
@@ -460,8 +462,8 @@ void SwapChainVkImpl::CreateVulkanSwapChain()
     //    swapchain_ci.pQueueFamilyIndices = queueFamilyIndices;
     //}
 
-    const VulkanUtilities::VulkanLogicalDevice& LogicalDevice = pRenderDeviceVk->GetLogicalDevice();
-    VkDevice                                    vkDevice      = pRenderDeviceVk->GetVkDevice();
+    const VulkanUtilities::LogicalDevice& LogicalDevice = pRenderDeviceVk->GetLogicalDevice();
+    VkDevice                              vkDevice      = pRenderDeviceVk->GetVkDevice();
 
     err = vkCreateSwapchainKHR(vkDevice, &swapchain_ci, NULL, &m_VkSwapChain);
     CHECK_VK_ERROR_AND_THROW(err, "Failed to create Vulkan swapchain");
@@ -524,7 +526,7 @@ SwapChainVkImpl::~SwapChainVkImpl()
 
     if (m_VkSurface != VK_NULL_HANDLE)
     {
-        vkDestroySurfaceKHR(m_VulkanInstance->GetVkInstance(), m_VkSurface, NULL);
+        vkDestroySurfaceKHR(m_Instance->GetVkInstance(), m_VkSurface, NULL);
     }
 }
 
@@ -597,10 +599,18 @@ void SwapChainVkImpl::InitBuffersAndViews()
     }
 }
 
+void SwapChainVkImpl::ThrottleFrameSubmission()
+{
+    if (m_FrameIndex > m_SwapChainDesc.BufferCount)
+    {
+        m_FrameCompleteFence->Wait(m_FrameIndex - m_SwapChainDesc.BufferCount);
+    }
+}
+
 VkResult SwapChainVkImpl::AcquireNextImage(DeviceContextVkImpl* pDeviceCtxVk)
 {
-    RenderDeviceVkImpl*                         pDeviceVk     = m_pRenderDevice.RawPtr<RenderDeviceVkImpl>();
-    const VulkanUtilities::VulkanLogicalDevice& LogicalDevice = pDeviceVk->GetLogicalDevice();
+    RenderDeviceVkImpl*                   pDeviceVk     = m_pRenderDevice.RawPtr<RenderDeviceVkImpl>();
+    const VulkanUtilities::LogicalDevice& LogicalDevice = pDeviceVk->GetLogicalDevice();
 
     // Applications should not rely on vkAcquireNextImageKHR blocking in order to
     // meter their rendering speed. The implementation may return from this function
@@ -612,20 +622,25 @@ VkResult SwapChainVkImpl::AcquireNextImage(DeviceContextVkImpl* pDeviceCtxVk)
     // vkAcquireNextImageKHR requires that the semaphore is not in use, so we must wait
     // for the frame (FrameIndex - BufferCount) to complete.
     // This also ensures that there are no more than BufferCount frames in flight at any time.
-    if (m_FrameIndex > m_SwapChainDesc.BufferCount)
+    ThrottleFrameSubmission();
+
+    RefCntAutoPtr<ManagedSemaphore>& ImageAcquiredSemaphore = m_ImageAcquiredSemaphores[m_SemaphoreIndex];
+
+    VkResult res    = vkAcquireNextImageKHR(LogicalDevice.GetVkDevice(), m_VkSwapChain, UINT64_MAX, ImageAcquiredSemaphore->Get(), VK_NULL_HANDLE, &m_BackBufferIndex);
+    m_ImageAcquired = (res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR);
+#if PLATFORM_APPLE
+    if (res == VK_SUBOPTIMAL_KHR)
     {
-        m_FrameCompleteFence->Wait(m_FrameIndex - m_SwapChainDesc.BufferCount);
+        // https://github.com/KhronosGroup/MoltenVK/issues/2542
+        m_ImageAcquired = false;
     }
-
-    VkSemaphore ImageAcquiredSemaphore = m_ImageAcquiredSemaphores[m_SemaphoreIndex]->Get();
-
-    VkResult res = vkAcquireNextImageKHR(LogicalDevice.GetVkDevice(), m_VkSwapChain, UINT64_MAX, ImageAcquiredSemaphore, VK_NULL_HANDLE, &m_BackBufferIndex);
-    if (res == VK_SUCCESS)
+#endif
+    if (m_ImageAcquired)
     {
         // Next command in the device context must wait for the next image to be acquired.
-        // Unlike fences or events, the act of waiting for a semaphore also unsignals that semaphore (6.4.2).
+        // Unlike fences or events, the act of waiting for a semaphore also unsignals that semaphore.
         // Swapchain image may be used as render target or as destination for copy command.
-        pDeviceCtxVk->AddWaitSemaphore(m_ImageAcquiredSemaphores[m_SemaphoreIndex], VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+        pDeviceCtxVk->AddWaitSemaphore(ImageAcquiredSemaphore, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
         if (!m_SwapChainImagesInitialized[m_BackBufferIndex])
         {
             // Vulkan validation layers do not like uninitialized memory.
@@ -661,40 +676,47 @@ void SwapChainVkImpl::Present(Uint32 SyncInterval)
     ITexture* pBackBuffer = GetCurrentBackBufferRTV()->GetTexture();
     pImmediateCtxVk->UnbindTextureFromFramebuffer(ClassPtrCast<TextureVkImpl>(pBackBuffer), false);
 
-    if (!m_IsMinimized)
+    // To properly handle the case where vkAcquireNextImageKHR returns the same index twice in a row, use
+    // a separate semaphore per swapchain image and index these semaphores using the index of the acquired image
+    // https://github.com/DiligentGraphics/DiligentCore/issues/682
+    RefCntAutoPtr<ManagedSemaphore>& DrawCompleteSemaphore = m_DrawCompleteSemaphores[m_BackBufferIndex];
+    if (m_ImageAcquired && !m_IsMinimized)
     {
         // TransitionImageLayout() never triggers flush
         pImmediateCtxVk->TransitionImageLayout(pBackBuffer, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         // The context can be empty if no render commands were issued by the app
         //VERIFY(pImmediateCtxVk->GetNumCommandsInCtx() != 0, "The context must not be flushed");
-        pImmediateCtxVk->AddSignalSemaphore(m_DrawCompleteSemaphores[m_SemaphoreIndex]);
-        pImmediateCtxVk->EnqueueSignal(m_FrameCompleteFence, m_FrameIndex++);
+        pImmediateCtxVk->AddSignalSemaphore(DrawCompleteSemaphore);
     }
 
+    pImmediateCtxVk->EnqueueSignal(m_FrameCompleteFence, m_FrameIndex++);
     pImmediateCtxVk->Flush();
 
     if (!m_IsMinimized)
     {
-        VkPresentInfoKHR PresentInfo = {};
-
-        PresentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        PresentInfo.pNext              = nullptr;
-        PresentInfo.waitSemaphoreCount = 1;
-        // Unlike fences or events, the act of waiting for a semaphore also unsignals that semaphore (6.4.2)
-        VkSemaphore WaitSemaphore[] = {m_DrawCompleteSemaphores[m_SemaphoreIndex]->Get()};
-        PresentInfo.pWaitSemaphores = WaitSemaphore;
-        PresentInfo.swapchainCount  = 1;
-        PresentInfo.pSwapchains     = &m_VkSwapChain;
-        PresentInfo.pImageIndices   = &m_BackBufferIndex;
-        VkResult Result             = VK_SUCCESS;
-        PresentInfo.pResults        = &Result;
-        pDeviceVk->LockCmdQueueAndRun(
-            pImmediateCtxVk->GetCommandQueueId(),
-            [&PresentInfo](ICommandQueueVk* pCmdQueueVk) //
-            {
-                pCmdQueueVk->Present(PresentInfo);
-            } //
-        );
+        VkResult Result = VK_ERROR_OUT_OF_DATE_KHR;
+        // Only present if the image was acquired successfully
+        if (m_ImageAcquired)
+        {
+            VkPresentInfoKHR PresentInfo{};
+            PresentInfo.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+            PresentInfo.pNext              = nullptr;
+            PresentInfo.waitSemaphoreCount = 1;
+            // Unlike fences or events, the act of waiting for a semaphore also unsignals that semaphore
+            VkSemaphore WaitSemaphore[] = {DrawCompleteSemaphore->Get()};
+            PresentInfo.pWaitSemaphores = WaitSemaphore;
+            PresentInfo.swapchainCount  = 1;
+            PresentInfo.pSwapchains     = &m_VkSwapChain;
+            PresentInfo.pImageIndices   = &m_BackBufferIndex;
+            PresentInfo.pResults        = &Result;
+            pDeviceVk->LockCmdQueueAndRun(
+                pImmediateCtxVk->GetCommandQueueId(),
+                [&PresentInfo](ICommandQueueVk* pCmdQueueVk) //
+                {
+                    pCmdQueueVk->Present(PresentInfo);
+                } //
+            );
+        }
 
         if (Result == VK_SUBOPTIMAL_KHR || Result == VK_ERROR_OUT_OF_DATE_KHR)
         {
@@ -741,7 +763,13 @@ void SwapChainVkImpl::Present(Uint32 SyncInterval)
             }
 #endif
         }
-        DEV_CHECK_ERR(res == VK_SUCCESS, "Failed to acquire next swap chain image");
+        // The image may still be out of date if the window keeps changing size
+    }
+    else
+    {
+        // Throttle frame submission to make sure that resources are released
+        // https://github.com/DiligentGraphics/DiligentSamples/issues/234
+        ThrottleFrameSubmission();
     }
 }
 
@@ -839,9 +867,9 @@ void SwapChainVkImpl::Resize(Uint32 NewWidth, Uint32 NewHeight, SURFACE_TRANSFOR
     if (m_VkSurface != VK_NULL_HANDLE)
     {
         // Check orientation
-        const RenderDeviceVkImpl*                    pRenderDeviceVk = m_pRenderDevice.ConstPtr<RenderDeviceVkImpl>();
-        const VulkanUtilities::VulkanPhysicalDevice& PhysicalDevice  = pRenderDeviceVk->GetPhysicalDevice();
-        const VkPhysicalDevice                       vkDeviceHandle  = PhysicalDevice.GetVkDeviceHandle();
+        const RenderDeviceVkImpl*              pRenderDeviceVk = m_pRenderDevice.ConstPtr<RenderDeviceVkImpl>();
+        const VulkanUtilities::PhysicalDevice& PhysicalDevice  = pRenderDeviceVk->GetPhysicalDevice();
+        const VkPhysicalDevice                 vkDeviceHandle  = PhysicalDevice.GetVkDeviceHandle();
 
         VkSurfaceCapabilitiesKHR surfCapabilities = {};
 
@@ -915,9 +943,8 @@ void SwapChainVkImpl::Resize(Uint32 NewWidth, Uint32 NewHeight, SURFACE_TRANSFOR
                 // RecreateVulkanSwapchain() unbinds default FB
                 RecreateVulkanSwapchain(pImmediateCtxVk);
 
-                VkResult res = AcquireNextImage(pImmediateCtxVk);
-                DEV_CHECK_ERR(res == VK_SUCCESS, "Failed to acquire next image for the just resized swap chain");
-                (void)res;
+                AcquireNextImage(pImmediateCtxVk);
+                // The image may be immediately out of date if the window keeps being resized
             }
             catch (const std::runtime_error&)
             {

@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,8 +25,11 @@
  *  of the possibility of such damages.
  */
 
-#include <iomanip>
 #include "SPIRVShaderResources.hpp"
+
+#include <iomanip>
+#include <cstring>
+
 #include "spirv_parser.hpp"
 #include "spirv_cross.hpp"
 #include "ShaderBase.hpp"
@@ -42,8 +45,9 @@ template <typename Type>
 Type GetResourceArraySize(const diligent_spirv_cross::Compiler& Compiler,
                           const diligent_spirv_cross::Resource& Res)
 {
-    const auto& type    = Compiler.get_type(Res.type_id);
-    uint32_t    arrSize = 1;
+    const diligent_spirv_cross::SPIRType& type = Compiler.get_type(Res.type_id);
+
+    uint32_t arrSize = 1;
     if (!type.array.empty())
     {
         // https://github.com/KhronosGroup/SPIRV-Cross/wiki/Reflection-API-user-guide#querying-array-types
@@ -57,7 +61,7 @@ Type GetResourceArraySize(const diligent_spirv_cross::Compiler& Compiler,
 static RESOURCE_DIMENSION GetResourceDimension(const diligent_spirv_cross::Compiler& Compiler,
                                                const diligent_spirv_cross::Resource& Res)
 {
-    const auto& type = Compiler.get_type(Res.type_id);
+    const diligent_spirv_cross::SPIRType& type = Compiler.get_type(Res.type_id);
     if (type.basetype == diligent_spirv_cross::SPIRType::BaseType::Image ||
         type.basetype == diligent_spirv_cross::SPIRType::BaseType::SampledImage)
     {
@@ -73,6 +77,11 @@ static RESOURCE_DIMENSION GetResourceDimension(const diligent_spirv_cross::Compi
             default: return RESOURCE_DIM_UNDEFINED;
         }
     }
+    else if (type.basetype == diligent_spirv_cross::SPIRType::BaseType::Struct)
+    {
+        // Uniform buffers and storage buffers are Struct types
+        return RESOURCE_DIM_BUFFER;
+    }
     else
     {
         return RESOURCE_DIM_UNDEFINED;
@@ -82,7 +91,7 @@ static RESOURCE_DIMENSION GetResourceDimension(const diligent_spirv_cross::Compi
 static bool IsMultisample(const diligent_spirv_cross::Compiler& Compiler,
                           const diligent_spirv_cross::Resource& Res)
 {
-    const auto& type = Compiler.get_type(Res.type_id);
+    const diligent_spirv_cross::SPIRType& type = Compiler.get_type(Res.type_id);
     if (type.basetype == diligent_spirv_cross::SPIRType::BaseType::Image ||
         type.basetype == diligent_spirv_cross::SPIRType::BaseType::SampledImage)
     {
@@ -100,7 +109,7 @@ static uint32_t GetDecorationOffset(const diligent_spirv_cross::Compiler& Compil
 {
     VERIFY(Compiler.has_decoration(Res.id, Decoration), "Resource \'", Res.name, "\' has no requested decoration");
     uint32_t offset   = 0;
-    auto     declared = Compiler.get_binary_offset_for_decoration(Res.id, Decoration, offset);
+    bool     declared = Compiler.get_binary_offset_for_decoration(Res.id, Decoration, offset);
     VERIFY(declared, "Requested decoration is not declared");
     (void)declared;
     return offset;
@@ -125,10 +134,28 @@ SPIRVShaderResourceAttribs::SPIRVShaderResourceAttribs(const diligent_spirv_cros
 // clang-format on
 {}
 
+// Constructor for push constants (no binding or descriptor set decoration)
+SPIRVShaderResourceAttribs::SPIRVShaderResourceAttribs(const char*  _Name,
+                                                       ResourceType _Type,
+                                                       Uint32       _BufferStaticSize) noexcept :
+    // clang-format off
+    Name                          {_Name},
+    // For push constants, ArraySize is always 1
+    // This is consistent with how inline constants work in the pipeline resource signature
+    ArraySize                     {1},
+    Type                          {_Type},
+    ResourceDim                   {RESOURCE_DIM_BUFFER},
+    IsMS                          {0},
+    BindingDecorationOffset       {0}, // Push constants have no binding decoration
+    DescriptorSetDecorationOffset {0}, // Push constants have no descriptor set decoration
+    BufferStaticSize              {_BufferStaticSize},
+    BufferStride                  {0}
+// clang-format on
+{}
 
 SHADER_RESOURCE_TYPE SPIRVShaderResourceAttribs::GetShaderResourceType(ResourceType Type)
 {
-    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 12, "Please handle the new resource type below");
+    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 13, "Please handle the new resource type below");
     switch (Type)
     {
         case SPIRVShaderResourceAttribs::ResourceType::UniformBuffer:
@@ -170,6 +197,10 @@ SHADER_RESOURCE_TYPE SPIRVShaderResourceAttribs::GetShaderResourceType(ResourceT
         case SPIRVShaderResourceAttribs::ResourceType::AccelerationStructure:
             return SHADER_RESOURCE_TYPE_ACCEL_STRUCT;
 
+        case SPIRVShaderResourceAttribs::ResourceType::PushConstant:
+            // Push constants map to constant buffer type with special inline constants flag
+            return SHADER_RESOURCE_TYPE_CONSTANT_BUFFER;
+
         default:
             UNEXPECTED("Unknown SPIRV resource type");
             return SHADER_RESOURCE_TYPE_UNKNOWN;
@@ -178,7 +209,7 @@ SHADER_RESOURCE_TYPE SPIRVShaderResourceAttribs::GetShaderResourceType(ResourceT
 
 PIPELINE_RESOURCE_FLAGS SPIRVShaderResourceAttribs::GetPipelineResourceFlags(ResourceType Type)
 {
-    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 12, "Please handle the new resource type below");
+    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 13, "Please handle the new resource type below");
     switch (Type)
     {
         case SPIRVShaderResourceAttribs::ResourceType::UniformTexelBuffer:
@@ -188,8 +219,47 @@ PIPELINE_RESOURCE_FLAGS SPIRVShaderResourceAttribs::GetPipelineResourceFlags(Res
         case SPIRVShaderResourceAttribs::ResourceType::SampledImage:
             return PIPELINE_RESOURCE_FLAG_COMBINED_SAMPLER;
 
+        case SPIRVShaderResourceAttribs::ResourceType::PushConstant:
+            // Push constants map to constant buffer with the inline constants flag
+            return PIPELINE_RESOURCE_FLAG_INLINE_CONSTANTS;
+
         default:
             return PIPELINE_RESOURCE_FLAG_NONE;
+    }
+}
+
+const char* SPIRVShaderResourceAttribs::ResourceTypeToString(SPIRVShaderResourceAttribs::ResourceType Type)
+{
+    switch (Type)
+    {
+        case SPIRVShaderResourceAttribs::ResourceType::UniformBuffer:
+            return "UniformBuffer";
+        case SPIRVShaderResourceAttribs::ResourceType::ROStorageBuffer:
+            return "ROStorageBuffer";
+        case SPIRVShaderResourceAttribs::ResourceType::RWStorageBuffer:
+            return "RWStorageBuffer";
+        case SPIRVShaderResourceAttribs::ResourceType::UniformTexelBuffer:
+            return "UniformTexelBuffer";
+        case SPIRVShaderResourceAttribs::ResourceType::StorageTexelBuffer:
+            return "StorageTexelBuffer";
+        case SPIRVShaderResourceAttribs::ResourceType::StorageImage:
+            return "StorageImage";
+        case SPIRVShaderResourceAttribs::ResourceType::SampledImage:
+            return "SampledImage";
+        case SPIRVShaderResourceAttribs::ResourceType::AtomicCounter:
+            return "AtomicCounter";
+        case SPIRVShaderResourceAttribs::ResourceType::SeparateImage:
+            return "SeparateImage";
+        case SPIRVShaderResourceAttribs::ResourceType::SeparateSampler:
+            return "SeparateSampler";
+        case SPIRVShaderResourceAttribs::ResourceType::InputAttachment:
+            return "InputAttachment";
+        case SPIRVShaderResourceAttribs::ResourceType::AccelerationStructure:
+            return "AccelerationStructure";
+        case SPIRVShaderResourceAttribs::ResourceType::PushConstant:
+            return "PushConstant";
+        default:
+            return "Unknown";
     }
 }
 
@@ -223,9 +293,9 @@ spv::ExecutionModel ShaderTypeToSpvExecutionModel(SHADER_TYPE ShaderType)
     }
 }
 
-const std::string& GetUBName(diligent_spirv_cross::Compiler&               Compiler,
-                             const diligent_spirv_cross::Resource&         UB,
-                             const diligent_spirv_cross::ParsedIR::Source& IRSource)
+const std::string& GetUBOrSBName(diligent_spirv_cross::Compiler&               Compiler,
+                                 const diligent_spirv_cross::Resource&         UB,
+                                 const diligent_spirv_cross::ParsedIR::Source& IRSource)
 {
     // Consider the following HLSL constant buffer:
     //
@@ -257,8 +327,35 @@ const std::string& GetUBName(diligent_spirv_cross::Compiler&               Compi
     // Note that for the byte code produced from GLSL, we must always
     // use UB.name even if the instance name is present
 
-    const auto& instance_name = Compiler.get_name(UB.id);
-    return (IRSource.hlsl && !instance_name.empty()) ? instance_name : UB.name;
+    const std::string& instance_name = Compiler.get_name(UB.id);
+    return ((IRSource.hlsl || IRSource.lang == spv::SourceLanguageSlang) && !instance_name.empty()) ? instance_name : UB.name;
+}
+
+// Get name for push constant buffer
+// Push constants may have their variable name empty (e.g., when declared as [[vk::push_constant]] cbuffer in HLSL)
+// In that case, we try to get the name from the base type (the struct type)
+const std::string& GetPushConstantName(diligent_spirv_cross::Compiler&               Compiler,
+                                       const diligent_spirv_cross::Resource&         PC,
+                                       const diligent_spirv_cross::ParsedIR::Source& IRSource)
+{
+    // First, try the standard method used for UBs/SBs
+    const std::string& Name = GetUBOrSBName(Compiler, PC, IRSource);
+    if (!Name.empty())
+        return Name;
+
+    // If the name is empty, try to get the name from the base type
+    // This handles cases like:
+    //   [[vk::push_constant]]
+    //   cbuffer Constants { ... };
+    // where the variable has no name but the struct type does
+    const std::string& base_type_name = Compiler.get_name(PC.base_type_id);
+    if (!base_type_name.empty())
+        return base_type_name;
+
+    // As a last resort, try to get the fallback name
+    // Note: get_fallback_name returns by value, so we can't return a reference to it
+    // Return the empty name and let the caller handle it
+    return Name;
 }
 
 static SHADER_CODE_BASIC_TYPE SpirvBaseTypeToShaderCodeBasicType(diligent_spirv_cross::SPIRType::BaseType SpvBaseType)
@@ -300,7 +397,7 @@ void LoadShaderCodeVariableDesc(const diligent_spirv_cross::Compiler& Compiler,
                                 bool                                  IsHLSLSource,
                                 ShaderCodeVariableDescX&              TypeDesc)
 {
-    const auto& SpvType = Compiler.get_type(TypeID);
+    const diligent_spirv_cross::SPIRType& SpvType = Compiler.get_type(TypeID);
     if (SpvType.basetype == diligent_spirv_cross::SPIRType::Struct)
     {
         TypeDesc.Class = SHADER_CODE_VARIABLE_CLASS_STRUCT;
@@ -347,7 +444,7 @@ void LoadShaderCodeVariableDesc(const diligent_spirv_cross::Compiler& Compiler,
 
         VarDesc.Offset = Compiler.type_struct_member_offset(SpvType, i);
 
-        auto idx = TypeDesc.AddMember(VarDesc);
+        size_t idx = TypeDesc.AddMember(VarDesc);
         VERIFY_EXPR(idx == i);
         LoadShaderCodeVariableDesc(Compiler, SpvType.member_types[i], Compiler.get_member_decoration_bitset(TypeID, i), IsHLSLSource, TypeDesc.GetMember(i));
     }
@@ -355,8 +452,8 @@ void LoadShaderCodeVariableDesc(const diligent_spirv_cross::Compiler& Compiler,
 
 ShaderCodeBufferDescX LoadUBReflection(const diligent_spirv_cross::Compiler& Compiler, const diligent_spirv_cross::Resource& UB, bool IsHLSLSource)
 {
-    const auto& SpvType = Compiler.get_type(UB.type_id);
-    const auto  Size    = Compiler.get_declared_struct_size(SpvType);
+    const diligent_spirv_cross::SPIRType& SpvType = Compiler.get_type(UB.type_id);
+    const size_t                          Size    = Compiler.get_declared_struct_size(SpvType);
 
     ShaderCodeBufferDescX UBDesc;
     UBDesc.Size = StaticCast<decltype(UBDesc.Size)>(Size);
@@ -366,7 +463,7 @@ ShaderCodeBufferDescX LoadUBReflection(const diligent_spirv_cross::Compiler& Com
         VarDesc.Name   = Compiler.get_member_name(UB.base_type_id, i).c_str();
         VarDesc.Offset = Compiler.type_struct_member_offset(SpvType, i);
 
-        auto idx = UBDesc.AddVariable(VarDesc);
+        size_t idx = UBDesc.AddVariable(VarDesc);
         VERIFY_EXPR(idx == i);
         LoadShaderCodeVariableDesc(Compiler, SpvType.member_types[i], Compiler.get_member_decoration_bitset(SpvType.self, i), IsHLSLSource, UBDesc.GetVariable(idx));
     }
@@ -377,29 +474,30 @@ ShaderCodeBufferDescX LoadUBReflection(const diligent_spirv_cross::Compiler& Com
 
 SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
                                            std::vector<uint32_t> spirv_binary,
-                                           const ShaderDesc&     shaderDesc,
-                                           const char*           CombinedSamplerSuffix,
-                                           bool                  LoadShaderStageInputs,
-                                           bool                  LoadUniformBufferReflection,
-                                           std::string&          EntryPoint) noexcept(false) :
-    m_ShaderType{shaderDesc.ShaderType}
+                                           const CreateInfo&     CI,
+                                           std::string*          pEntryPoint) noexcept(false) :
+    m_ShaderType{CI.ShaderType}
 {
     // https://github.com/KhronosGroup/SPIRV-Cross/wiki/Reflection-API-user-guide
     diligent_spirv_cross::Parser parser{std::move(spirv_binary)};
     parser.parse();
-    const auto ParsedIRSource = parser.get_parsed_ir().source;
-    m_IsHLSLSource            = ParsedIRSource.hlsl;
+    const diligent_spirv_cross::ParsedIR::Source ParsedIRSource = parser.get_parsed_ir().source;
+
+    m_IsHLSLSource = ParsedIRSource.hlsl;
     diligent_spirv_cross::Compiler Compiler{std::move(parser.get_parsed_ir())};
 
-    spv::ExecutionModel ExecutionModel = ShaderTypeToSpvExecutionModel(shaderDesc.ShaderType);
+    std::string  EntryPointLocal;
+    std::string& EntryPoint = pEntryPoint != nullptr ? *pEntryPoint : EntryPointLocal;
+
+    spv::ExecutionModel ExecutionModel = ShaderTypeToSpvExecutionModel(m_ShaderType);
     auto                EntryPoints    = Compiler.get_entry_points_and_stages();
-    for (const auto& CurrEntryPoint : EntryPoints)
+    for (const diligent_spirv_cross::EntryPoint& CurrEntryPoint : EntryPoints)
     {
         if (CurrEntryPoint.execution_model == ExecutionModel)
         {
             if (!EntryPoint.empty())
             {
-                LOG_WARNING_MESSAGE("More than one entry point of type ", GetShaderTypeLiteralName(shaderDesc.ShaderType), " found in SPIRV binary for shader '", shaderDesc.Name, "'. The first one ('", EntryPoint, "') will be used.");
+                LOG_WARNING_MESSAGE("More than one entry point of type ", GetShaderTypeLiteralName(m_ShaderType), " found in SPIRV binary for shader '", CI.Name, "'. The first one ('", EntryPoint, "') will be used.");
             }
             else
             {
@@ -409,7 +507,7 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
     }
     if (EntryPoint.empty())
     {
-        LOG_ERROR_AND_THROW("Unable to find entry point of type ", GetShaderTypeLiteralName(shaderDesc.ShaderType), " in SPIRV binary for shader '", shaderDesc.Name, "'");
+        LOG_ERROR_AND_THROW("Unable to find entry point of type ", GetShaderTypeLiteralName(m_ShaderType), " in SPIRV binary for shader '", CI.Name, "'");
     }
     Compiler.set_entry_point(EntryPoint, ExecutionModel);
 
@@ -417,12 +515,24 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
     diligent_spirv_cross::ShaderResources resources = Compiler.get_shader_resources();
 
     size_t ResourceNamesPoolSize = 0;
-    for (const auto& ub : resources.uniform_buffers)
-        ResourceNamesPoolSize += GetUBName(Compiler, ub, ParsedIRSource).length() + 1;
-    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 12, "Please account for the new resource type below");
+    for (const diligent_spirv_cross::Resource& ub : resources.uniform_buffers)
+        ResourceNamesPoolSize += GetUBOrSBName(Compiler, ub, ParsedIRSource).length() + 1;
+    for (const diligent_spirv_cross::Resource& sb : resources.storage_buffers)
+        ResourceNamesPoolSize += GetUBOrSBName(Compiler, sb, ParsedIRSource).length() + 1;
+    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 13, "Please account for the new resource type below");
+
+    // Process push constant buffers - Vulkan spec allows only one push_constant buffer per pipeline
+    if (resources.push_constant_buffers.size() > 1)
+    {
+        LOG_ERROR_AND_THROW("Shader '", CI.Name, "' contains ", resources.push_constant_buffers.size(),
+                            " push constant buffers, but Vulkan spec allows only one push_constant buffer per pipeline.");
+    }
+    // For push constants, use GetPushConstantName which also tries to get the name from the base type
+    for (const diligent_spirv_cross::Resource& pc : resources.push_constant_buffers)
+        ResourceNamesPoolSize += GetPushConstantName(Compiler, pc, ParsedIRSource).length() + 1;
+
     for (auto* pResType :
          {
-             &resources.storage_buffers,
              &resources.storage_images,
              &resources.sampled_images,
              &resources.atomic_counters,
@@ -432,27 +542,28 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
              &resources.acceleration_structures //
          })                                     //
     {
-        for (const auto& res : *pResType)
+        for (const diligent_spirv_cross::Resource& res : *pResType)
             ResourceNamesPoolSize += res.name.length() + 1;
     }
 
-    if (CombinedSamplerSuffix != nullptr)
+    if (CI.CombinedSamplerSuffix != nullptr)
     {
-        ResourceNamesPoolSize += strlen(CombinedSamplerSuffix) + 1;
+        ResourceNamesPoolSize += strlen(CI.CombinedSamplerSuffix) + 1;
     }
 
-    VERIFY_EXPR(shaderDesc.Name != nullptr);
-    ResourceNamesPoolSize += strlen(shaderDesc.Name) + 1;
+    VERIFY_EXPR(CI.Name != nullptr);
+    ResourceNamesPoolSize += strlen(CI.Name) + 1;
 
     Uint32 NumShaderStageInputs = 0;
 
+    bool LoadShaderStageInputs = CI.LoadShaderStageInputs;
     if (!m_IsHLSLSource || resources.stage_inputs.empty())
         LoadShaderStageInputs = false;
     if (LoadShaderStageInputs)
     {
         const auto& Extensions         = Compiler.get_declared_extensions();
         bool        HlslFunctionality1 = false;
-        for (const auto& ext : Extensions)
+        for (const std::string& ext : Extensions)
         {
             HlslFunctionality1 = (ext == "SPV_GOOGLE_hlsl_functionality1");
             if (HlslFunctionality1)
@@ -461,11 +572,11 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
         if (HlslFunctionality1)
         {
-            for (const auto& Input : resources.stage_inputs)
+            for (const diligent_spirv_cross::Resource& Input : resources.stage_inputs)
             {
                 if (Compiler.has_decoration(Input.id, spv::Decoration::DecorationHlslSemanticGOOGLE))
                 {
-                    const auto& Semantic = Compiler.get_decoration_string(Input.id, spv::Decoration::DecorationHlslSemanticGOOGLE);
+                    const std::string& Semantic = Compiler.get_decoration_string(Input.id, spv::Decoration::DecorationHlslSemanticGOOGLE);
                     ResourceNamesPoolSize += Semantic.length() + 1;
                     ++NumShaderStageInputs;
                 }
@@ -480,7 +591,7 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
             LoadShaderStageInputs = false;
             if (m_IsHLSLSource)
             {
-                LOG_WARNING_MESSAGE("SPIRV byte code of shader '", shaderDesc.Name,
+                LOG_WARNING_MESSAGE("SPIRV byte code of shader '", CI.Name,
                                     "' does not use SPV_GOOGLE_hlsl_functionality1 extension. "
                                     "As a result, it is not possible to get semantics of shader inputs and map them to proper locations. "
                                     "The shader will still work correctly if all attributes are declared in ascending order without any gaps. "
@@ -490,31 +601,74 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
     }
 
     ResourceCounters ResCounters;
-    ResCounters.NumUBs          = static_cast<Uint32>(resources.uniform_buffers.size());
-    ResCounters.NumSBs          = static_cast<Uint32>(resources.storage_buffers.size());
-    ResCounters.NumImgs         = static_cast<Uint32>(resources.storage_images.size());
-    ResCounters.NumSmpldImgs    = static_cast<Uint32>(resources.sampled_images.size());
-    ResCounters.NumACs          = static_cast<Uint32>(resources.atomic_counters.size());
-    ResCounters.NumSepSmplrs    = static_cast<Uint32>(resources.separate_samplers.size());
-    ResCounters.NumSepImgs      = static_cast<Uint32>(resources.separate_images.size());
-    ResCounters.NumInptAtts     = static_cast<Uint32>(resources.subpass_inputs.size());
-    ResCounters.NumAccelStructs = static_cast<Uint32>(resources.acceleration_structures.size());
-    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 12, "Please set the new resource type counter here");
+    ResCounters.NumUBs           = static_cast<Uint32>(resources.uniform_buffers.size());
+    ResCounters.NumSBs           = static_cast<Uint32>(resources.storage_buffers.size());
+    ResCounters.NumImgs          = static_cast<Uint32>(resources.storage_images.size());
+    ResCounters.NumSmpldImgs     = static_cast<Uint32>(resources.sampled_images.size());
+    ResCounters.NumACs           = static_cast<Uint32>(resources.atomic_counters.size());
+    ResCounters.NumSepSmplrs     = static_cast<Uint32>(resources.separate_samplers.size());
+    ResCounters.NumSepImgs       = static_cast<Uint32>(resources.separate_images.size());
+    ResCounters.NumInptAtts      = static_cast<Uint32>(resources.subpass_inputs.size());
+    ResCounters.NumAccelStructs  = static_cast<Uint32>(resources.acceleration_structures.size());
+    ResCounters.NumPushConstants = static_cast<Uint32>(resources.push_constant_buffers.size());
+    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 13, "Please set the new resource type counter here");
+
+    // Specialization constants reflection
+    diligent_spirv_cross::SmallVector<SPIRVSpecializationConstantAttribs> SpecConstants;
+    Uint32                                                                NumSpecConstants = 0;
+    {
+        diligent_spirv_cross::SmallVector<diligent_spirv_cross::SpecializationConstant> spec_consts =
+            Compiler.get_specialization_constants();
+        SpecConstants.reserve(spec_consts.size());
+        for (const diligent_spirv_cross::SpecializationConstant& sc : spec_consts)
+        {
+            const diligent_spirv_cross::SPIRConstant& Constant = Compiler.get_constant(sc.id);
+            const diligent_spirv_cross::SPIRType&     Type     = Compiler.get_type(Constant.constant_type);
+
+            // Only support scalar specialization constants
+            if (Type.vecsize != 1 || Type.columns != 1)
+            {
+                LOG_WARNING_MESSAGE("Specialization constant '", Compiler.get_name(sc.id),
+                                    "' (SpecId=", sc.constant_id, ") in shader '", CI.Name,
+                                    "' is not a scalar type and will be skipped.");
+                continue;
+            }
+
+            const std::string& Name = Compiler.get_name(sc.id);
+            if (Name.empty())
+            {
+                LOG_WARNING_MESSAGE("Specialization constant with SpecId=", sc.constant_id,
+                                    " in shader '", CI.Name, "' has no name (OpName) and will be skipped.");
+                continue;
+            }
+            ResourceNamesPoolSize += Name.length() + 1;
+
+            SPIRVSpecializationConstantAttribs Info{
+                Name.c_str(),
+                sc.constant_id,
+                // OpTypeBool has width==1 in SPIRV-Cross; use 4 bytes (VkBool32) for bool specialization constants
+                Type.basetype == diligent_spirv_cross::SPIRType::Boolean ? 4 : Type.width / 8,
+                SpirvBaseTypeToShaderCodeBasicType(Type.basetype),
+            };
+            SpecConstants.push_back(Info);
+        }
+        NumSpecConstants = static_cast<Uint32>(SpecConstants.size());
+    }
 
     // Resource names pool is only needed to facilitate string allocation.
     StringPool ResourceNamesPool;
-    Initialize(Allocator, ResCounters, NumShaderStageInputs, ResourceNamesPoolSize, ResourceNamesPool);
+    Initialize(Allocator, ResCounters, NumShaderStageInputs, NumSpecConstants, ResourceNamesPoolSize, ResourceNamesPool);
 
     // Uniform buffer reflections
     std::vector<ShaderCodeBufferDescX> UBReflections;
 
     {
         Uint32 CurrUB = 0;
-        for (const auto& UB : resources.uniform_buffers)
+        for (const diligent_spirv_cross::Resource& UB : resources.uniform_buffers)
         {
-            const auto& name = GetUBName(Compiler, UB, ParsedIRSource);
-            const auto& Type = Compiler.get_type(UB.type_id);
-            const auto  Size = Compiler.get_declared_struct_size(Type);
+            const std::string&                    name = GetUBOrSBName(Compiler, UB, ParsedIRSource);
+            const diligent_spirv_cross::SPIRType& Type = Compiler.get_type(UB.type_id);
+            const size_t                          Size = Compiler.get_declared_struct_size(Type);
             new (&GetUB(CurrUB++)) SPIRVShaderResourceAttribs //
                 {
                     Compiler,
@@ -524,7 +678,7 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
                     static_cast<Uint32>(Size) //
                 };
 
-            if (LoadUniformBufferReflection)
+            if (CI.LoadUniformBufferReflection)
             {
                 UBReflections.emplace_back(LoadUBReflection(Compiler, UB, m_IsHLSLSource));
             }
@@ -534,21 +688,25 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     {
         Uint32 CurrSB = 0;
-        for (const auto& SB : resources.storage_buffers)
+        for (const diligent_spirv_cross::Resource& SB : resources.storage_buffers)
         {
-            auto BufferFlags = Compiler.get_buffer_block_flags(SB.id);
-            auto IsReadOnly  = BufferFlags.get(spv::DecorationNonWritable);
-            auto ResType     = IsReadOnly ?
+            const std::string&           name        = GetUBOrSBName(Compiler, SB, ParsedIRSource);
+            diligent_spirv_cross::Bitset BufferFlags = Compiler.get_buffer_block_flags(SB.id);
+            bool                         IsReadOnly  = BufferFlags.get(spv::DecorationNonWritable);
+
+            const SPIRVShaderResourceAttribs::ResourceType ResType = IsReadOnly ?
                 SPIRVShaderResourceAttribs::ResourceType::ROStorageBuffer :
                 SPIRVShaderResourceAttribs::ResourceType::RWStorageBuffer;
-            const auto& Type   = Compiler.get_type(SB.type_id);
-            const auto  Size   = Compiler.get_declared_struct_size(Type);
-            const auto  Stride = Compiler.get_declared_struct_size_runtime_array(Type, 1) - Size;
+
+            const diligent_spirv_cross::SPIRType& Type = Compiler.get_type(SB.type_id);
+
+            const size_t Size   = Compiler.get_declared_struct_size(Type);
+            const size_t Stride = Compiler.get_declared_struct_size_runtime_array(Type, 1) - Size;
             new (&GetSB(CurrSB++)) SPIRVShaderResourceAttribs //
                 {
                     Compiler,
                     SB,
-                    ResourceNamesPool.CopyString(SB.name),
+                    ResourceNamesPool.CopyString(name),
                     ResType,
                     static_cast<Uint32>(Size),
                     static_cast<Uint32>(Stride) //
@@ -559,12 +717,14 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     {
         Uint32 CurrSmplImg = 0;
-        for (const auto& SmplImg : resources.sampled_images)
+        for (const diligent_spirv_cross::Resource& SmplImg : resources.sampled_images)
         {
-            const auto& type    = Compiler.get_type(SmplImg.type_id);
-            auto        ResType = type.image.dim == spv::DimBuffer ?
+            const diligent_spirv_cross::SPIRType& type = Compiler.get_type(SmplImg.type_id);
+
+            SPIRVShaderResourceAttribs::ResourceType ResType = type.image.dim == spv::DimBuffer ?
                 SPIRVShaderResourceAttribs::ResourceType::UniformTexelBuffer :
                 SPIRVShaderResourceAttribs::ResourceType::SampledImage;
+
             new (&GetSmpldImg(CurrSmplImg++)) SPIRVShaderResourceAttribs //
                 {
                     Compiler,
@@ -578,12 +738,14 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     {
         Uint32 CurrImg = 0;
-        for (const auto& Img : resources.storage_images)
+        for (const diligent_spirv_cross::Resource& Img : resources.storage_images)
         {
-            const auto& type    = Compiler.get_type(Img.type_id);
-            auto        ResType = type.image.dim == spv::DimBuffer ?
+            const diligent_spirv_cross::SPIRType& type = Compiler.get_type(Img.type_id);
+
+            SPIRVShaderResourceAttribs::ResourceType ResType = type.image.dim == spv::DimBuffer ?
                 SPIRVShaderResourceAttribs::ResourceType::StorageTexelBuffer :
                 SPIRVShaderResourceAttribs::ResourceType::StorageImage;
+
             new (&GetImg(CurrImg++)) SPIRVShaderResourceAttribs //
                 {
                     Compiler,
@@ -597,7 +759,7 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     {
         Uint32 CurrAC = 0;
-        for (const auto& AC : resources.atomic_counters)
+        for (const diligent_spirv_cross::Resource& AC : resources.atomic_counters)
         {
             new (&GetAC(CurrAC++)) SPIRVShaderResourceAttribs //
                 {
@@ -612,7 +774,7 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     {
         Uint32 CurrSepSmpl = 0;
-        for (const auto& SepSam : resources.separate_samplers)
+        for (const diligent_spirv_cross::Resource& SepSam : resources.separate_samplers)
         {
             new (&GetSepSmplr(CurrSepSmpl++)) SPIRVShaderResourceAttribs //
                 {
@@ -627,10 +789,11 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     {
         Uint32 CurrSepImg = 0;
-        for (const auto& SepImg : resources.separate_images)
+        for (const diligent_spirv_cross::Resource& SepImg : resources.separate_images)
         {
-            const auto& type    = Compiler.get_type(SepImg.type_id);
-            const auto  ResType = type.image.dim == spv::DimBuffer ?
+            const diligent_spirv_cross::SPIRType& type = Compiler.get_type(SepImg.type_id);
+
+            const SPIRVShaderResourceAttribs::ResourceType ResType = type.image.dim == spv::DimBuffer ?
                 SPIRVShaderResourceAttribs::ResourceType::UniformTexelBuffer :
                 SPIRVShaderResourceAttribs::ResourceType::SeparateImage;
 
@@ -647,7 +810,7 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     {
         Uint32 CurrSubpassInput = 0;
-        for (const auto& SubpassInput : resources.subpass_inputs)
+        for (const diligent_spirv_cross::Resource& SubpassInput : resources.subpass_inputs)
         {
             new (&GetInptAtt(CurrSubpassInput++)) SPIRVShaderResourceAttribs //
                 {
@@ -662,7 +825,7 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     {
         Uint32 CurrAccelStruct = 0;
-        for (const auto& AccelStruct : resources.acceleration_structures)
+        for (const diligent_spirv_cross::Resource& AccelStruct : resources.acceleration_structures)
         {
             new (&GetAccelStruct(CurrAccelStruct++)) SPIRVShaderResourceAttribs //
                 {
@@ -675,23 +838,42 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
         VERIFY_EXPR(CurrAccelStruct == GetNumAccelStructs());
     }
 
-    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 12, "Please initialize SPIRVShaderResourceAttribs for the new resource type here");
-
-    if (CombinedSamplerSuffix != nullptr)
     {
-        m_CombinedSamplerSuffix = ResourceNamesPool.CopyString(CombinedSamplerSuffix);
+        Uint32 CurrPushConstant = 0;
+        for (const diligent_spirv_cross::Resource& PushConst : resources.push_constant_buffers)
+        {
+            const std::string&                    pcName = GetPushConstantName(Compiler, PushConst, ParsedIRSource);
+            const diligent_spirv_cross::SPIRType& Type   = Compiler.get_type(PushConst.type_id);
+            const size_t                          Size   = Compiler.get_declared_struct_size(Type);
+
+            // Push constants use a special constructor without binding/descriptor set decorations
+            new (&GetPushConstant(CurrPushConstant++)) SPIRVShaderResourceAttribs //
+                {
+                    ResourceNamesPool.CopyString(pcName),
+                    SPIRVShaderResourceAttribs::ResourceType::PushConstant,
+                    static_cast<Uint32>(Size) //
+                };
+        }
+        VERIFY_EXPR(CurrPushConstant == GetNumPushConstants());
     }
 
-    m_ShaderName = ResourceNamesPool.CopyString(shaderDesc.Name);
+    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 13, "Please initialize SPIRVShaderResourceAttribs for the new resource type here");
+
+    if (CI.CombinedSamplerSuffix != nullptr)
+    {
+        m_CombinedSamplerSuffix = ResourceNamesPool.CopyString(CI.CombinedSamplerSuffix);
+    }
+
+    m_ShaderName = ResourceNamesPool.CopyString(CI.Name);
 
     if (LoadShaderStageInputs)
     {
         Uint32 CurrStageInput = 0;
-        for (const auto& Input : resources.stage_inputs)
+        for (const diligent_spirv_cross::Resource& Input : resources.stage_inputs)
         {
             if (Compiler.has_decoration(Input.id, spv::Decoration::DecorationHlslSemanticGOOGLE))
             {
-                const auto& Semantic = Compiler.get_decoration_string(Input.id, spv::Decoration::DecorationHlslSemanticGOOGLE);
+                const std::string& Semantic = Compiler.get_decoration_string(Input.id, spv::Decoration::DecorationHlslSemanticGOOGLE);
                 new (&GetShaderStageInputAttribs(CurrStageInput++)) SPIRVShaderStageInputAttribs //
                     {
                         ResourceNamesPool.CopyString(Semantic),
@@ -702,9 +884,25 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
         VERIFY_EXPR(CurrStageInput == GetNumShaderStageInputs());
     }
 
+    if (!SpecConstants.empty())
+    {
+        Uint32 CurrSpecConst = 0;
+        for (const SPIRVSpecializationConstantAttribs& SC : SpecConstants)
+        {
+            new (&GetSpecConstant(CurrSpecConst++)) SPIRVSpecializationConstantAttribs //
+                {
+                    ResourceNamesPool.CopyString(SC.Name),
+                    SC.SpecId,
+                    SC.Size,
+                    SC.BasicType //
+                };
+        }
+        VERIFY_EXPR(CurrSpecConst == GetNumSpecConstants());
+    }
+
     VERIFY(ResourceNamesPool.GetRemainingSize() == 0, "Names pool must be empty");
 
-    if (shaderDesc.ShaderType == SHADER_TYPE_COMPUTE)
+    if (m_ShaderType == SHADER_TYPE_COMPUTE)
     {
         for (uint32_t i = 0; i < m_ComputeGroupSize.size(); ++i)
             m_ComputeGroupSize[i] = Compiler.get_execution_mode_argument(spv::ExecutionModeLocalSize, i);
@@ -712,7 +910,7 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 
     if (!UBReflections.empty())
     {
-        VERIFY_EXPR(LoadUniformBufferReflection);
+        VERIFY_EXPR(CI.LoadUniformBufferReflection);
         VERIFY_EXPR(UBReflections.size() == GetNumUBs());
         m_UBReflectionBuffer = ShaderCodeBufferDescX::PackArray(UBReflections.cbegin(), UBReflections.cend(), GetRawAllocator());
     }
@@ -722,62 +920,69 @@ SPIRVShaderResources::SPIRVShaderResources(IMemoryAllocator&     Allocator,
 void SPIRVShaderResources::Initialize(IMemoryAllocator&       Allocator,
                                       const ResourceCounters& Counters,
                                       Uint32                  NumShaderStageInputs,
+                                      Uint32                  NumSpecConstants,
                                       size_t                  ResourceNamesPoolSize,
                                       StringPool&             ResourceNamesPool)
 {
-    Uint32           CurrentOffset = 0;
-    constexpr Uint32 MaxOffset     = std::numeric_limits<OffsetType>::max();
-    auto             AdvanceOffset = [&CurrentOffset, MaxOffset](Uint32 NumResources) {
+    constexpr Uint32 MaxOffset = std::numeric_limits<OffsetType>::max();
+
+    auto SetOffset = [CurrentOffset = Uint32{0}, MaxOffset, this](ResourceClass ResClass, Uint32 NumResources) mutable {
         VERIFY(CurrentOffset <= MaxOffset, "Current offset (", CurrentOffset, ") exceeds max allowed value (", MaxOffset, ")");
         (void)MaxOffset;
-        auto Offset = static_cast<OffsetType>(CurrentOffset);
+        m_Offsets[static_cast<size_t>(ResClass)] = static_cast<OffsetType>(CurrentOffset);
         CurrentOffset += NumResources;
-        return Offset;
     };
 
-    auto UniformBufferOffset = AdvanceOffset(Counters.NumUBs);
-    (void)UniformBufferOffset;
-    m_StorageBufferOffset   = AdvanceOffset(Counters.NumSBs);
-    m_StorageImageOffset    = AdvanceOffset(Counters.NumImgs);
-    m_SampledImageOffset    = AdvanceOffset(Counters.NumSmpldImgs);
-    m_AtomicCounterOffset   = AdvanceOffset(Counters.NumACs);
-    m_SeparateSamplerOffset = AdvanceOffset(Counters.NumSepSmplrs);
-    m_SeparateImageOffset   = AdvanceOffset(Counters.NumSepImgs);
-    m_InputAttachmentOffset = AdvanceOffset(Counters.NumInptAtts);
-    m_AccelStructOffset     = AdvanceOffset(Counters.NumAccelStructs);
-    m_TotalResources        = AdvanceOffset(0);
-    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 12, "Please update the new resource type offset");
+    SetOffset(ResourceClass::UniformBuffer, Counters.NumUBs);
+    SetOffset(ResourceClass::StorageBuffer, Counters.NumSBs);
+    SetOffset(ResourceClass::StorageImage, Counters.NumImgs);
+    SetOffset(ResourceClass::SampledImage, Counters.NumSmpldImgs);
+    SetOffset(ResourceClass::AtomicCounter, Counters.NumACs);
+    SetOffset(ResourceClass::SeparateSampler, Counters.NumSepSmplrs);
+    SetOffset(ResourceClass::SeparateImage, Counters.NumSepImgs);
+    SetOffset(ResourceClass::InputAttachment, Counters.NumInptAtts);
+    SetOffset(ResourceClass::AccelStruct, Counters.NumAccelStructs);
+    SetOffset(ResourceClass::PushConstant, Counters.NumPushConstants);
+    SetOffset(ResourceClass::NumClasses, 0);
+    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 13, "Please update the new resource type offset");
 
     VERIFY(NumShaderStageInputs <= MaxOffset, "Max offset exceeded");
     m_NumShaderStageInputs = static_cast<OffsetType>(NumShaderStageInputs);
 
-    auto AlignedResourceNamesPoolSize = AlignUp(ResourceNamesPoolSize, sizeof(void*));
+    VERIFY(NumSpecConstants <= MaxOffset, "Max offset exceeded");
+    m_NumSpecConstants = static_cast<OffsetType>(NumSpecConstants);
+
+    size_t AlignedResourceNamesPoolSize = AlignUp(ResourceNamesPoolSize, sizeof(void*));
 
     static_assert(sizeof(SPIRVShaderResourceAttribs) % sizeof(void*) == 0, "Size of SPIRVShaderResourceAttribs struct must be multiple of sizeof(void*)");
+    static_assert(sizeof(SPIRVSpecializationConstantAttribs) % sizeof(void*) == 0, "Size of SPIRVSpecializationConstantAttribs struct must be multiple of sizeof(void*)");
     // clang-format off
-    auto MemorySize = m_TotalResources              * sizeof(SPIRVShaderResourceAttribs) +
-                      m_NumShaderStageInputs        * sizeof(SPIRVShaderStageInputAttribs) +
-                      AlignedResourceNamesPoolSize  * sizeof(char);
+    size_t MemorySize = GetTotalResources()           * sizeof(SPIRVShaderResourceAttribs) +
+                        m_NumShaderStageInputs        * sizeof(SPIRVShaderStageInputAttribs) +
+                        m_NumSpecConstants            * sizeof(SPIRVSpecializationConstantAttribs) +
+                        AlignedResourceNamesPoolSize  * sizeof(char);
 
-    VERIFY_EXPR(GetNumUBs()          == Counters.NumUBs);
-    VERIFY_EXPR(GetNumSBs()          == Counters.NumSBs);
-    VERIFY_EXPR(GetNumImgs()         == Counters.NumImgs);
-    VERIFY_EXPR(GetNumSmpldImgs()    == Counters.NumSmpldImgs);
-    VERIFY_EXPR(GetNumACs()          == Counters.NumACs);
-    VERIFY_EXPR(GetNumSepSmplrs()    == Counters.NumSepSmplrs);
-    VERIFY_EXPR(GetNumSepImgs()      == Counters.NumSepImgs);
-    VERIFY_EXPR(GetNumInptAtts()     == Counters.NumInptAtts);
-    VERIFY_EXPR(GetNumAccelStructs() == Counters.NumAccelStructs);
-    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 12, "Please update the new resource count verification");
+    VERIFY_EXPR(GetNumUBs()           == Counters.NumUBs);
+    VERIFY_EXPR(GetNumSBs()           == Counters.NumSBs);
+    VERIFY_EXPR(GetNumImgs()          == Counters.NumImgs);
+    VERIFY_EXPR(GetNumSmpldImgs()     == Counters.NumSmpldImgs);
+    VERIFY_EXPR(GetNumACs()           == Counters.NumACs);
+    VERIFY_EXPR(GetNumSepSmplrs()     == Counters.NumSepSmplrs);
+    VERIFY_EXPR(GetNumSepImgs()       == Counters.NumSepImgs);
+    VERIFY_EXPR(GetNumInptAtts()      == Counters.NumInptAtts);
+    VERIFY_EXPR(GetNumAccelStructs()  == Counters.NumAccelStructs);
+    VERIFY_EXPR(GetNumPushConstants() == Counters.NumPushConstants);
+    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 13, "Please update the new resource count verification");
     // clang-format on
 
     if (MemorySize)
     {
-        auto* pRawMem   = Allocator.Allocate(MemorySize, "Memory for shader resources", __FILE__, __LINE__);
+        void* pRawMem   = Allocator.Allocate(MemorySize, "Memory for shader resources", __FILE__, __LINE__);
         m_MemoryBuffer  = std::unique_ptr<void, STDDeleterRawMem<void>>(pRawMem, Allocator);
         char* NamesPool = reinterpret_cast<char*>(m_MemoryBuffer.get()) +
-            m_TotalResources * sizeof(SPIRVShaderResourceAttribs) +
-            m_NumShaderStageInputs * sizeof(SPIRVShaderStageInputAttribs);
+            GetTotalResources() * sizeof(SPIRVShaderResourceAttribs) +
+            m_NumShaderStageInputs * sizeof(SPIRVShaderStageInputAttribs) +
+            m_NumSpecConstants * sizeof(SPIRVSpecializationConstantAttribs);
         ResourceNamesPool.AssignMemory(NamesPool, ResourceNamesPoolSize);
     }
 }
@@ -811,10 +1016,16 @@ SPIRVShaderResources::~SPIRVShaderResources()
     for (Uint32 n = 0; n < GetNumShaderStageInputs(); ++n)
         GetShaderStageInputAttribs(n).~SPIRVShaderStageInputAttribs();
 
+    for (Uint32 n = 0; n < GetNumSpecConstants(); ++n)
+        GetSpecConstant(n).~SPIRVSpecializationConstantAttribs();
+
     for (Uint32 n = 0; n < GetNumAccelStructs(); ++n)
         GetAccelStruct(n).~SPIRVShaderResourceAttribs();
 
-    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 12, "Please add destructor for the new resource");
+    for (Uint32 n = 0; n < GetNumPushConstants(); ++n)
+        GetPushConstant(n).~SPIRVShaderResourceAttribs();
+
+    static_assert(Uint32{SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes} == 13, "Please add destructor for the new resource");
 }
 
 void SPIRVShaderResources::MapHLSLVertexShaderInputs(std::vector<uint32_t>& SPIRV) const
@@ -849,6 +1060,79 @@ void SPIRVShaderResources::MapHLSLVertexShaderInputs(std::vector<uint32_t>& SPIR
         }
         SPIRV[Input.LocationDecorationOffset] = Location;
     }
+}
+
+SPIRVShaderResources::ResourceClass SPIRVShaderResources::ResourceTypeToClass(SPIRVShaderResourceAttribs::ResourceType ResType)
+{
+    static_assert(static_cast<size_t>(SPIRVShaderResourceAttribs::ResourceType::NumResourceTypes) == 13, "Did you add a new resource type? Please update the switch statement below.");
+    static_assert(static_cast<size_t>(ResourceClass::NumClasses) == 10, "Did you add a new resource class? Please update the switch statement below.");
+    switch (ResType)
+    {
+        // clang-format off
+        case SPIRVShaderResourceAttribs::ResourceType::UniformBuffer:        return ResourceClass::UniformBuffer;
+        case SPIRVShaderResourceAttribs::ResourceType::ROStorageBuffer:      return ResourceClass::StorageBuffer;
+        case SPIRVShaderResourceAttribs::ResourceType::RWStorageBuffer:      return ResourceClass::StorageBuffer;
+        case SPIRVShaderResourceAttribs::ResourceType::UniformTexelBuffer:   return ResourceClass::SeparateImage;
+        case SPIRVShaderResourceAttribs::ResourceType::StorageTexelBuffer:   return ResourceClass::StorageImage;
+        case SPIRVShaderResourceAttribs::ResourceType::StorageImage:         return ResourceClass::StorageImage;
+        case SPIRVShaderResourceAttribs::ResourceType::SampledImage:         return ResourceClass::SampledImage;
+        case SPIRVShaderResourceAttribs::ResourceType::AtomicCounter:        return ResourceClass::AtomicCounter;
+        case SPIRVShaderResourceAttribs::ResourceType::SeparateImage:        return ResourceClass::SeparateImage;
+        case SPIRVShaderResourceAttribs::ResourceType::SeparateSampler:      return ResourceClass::SeparateSampler;
+        case SPIRVShaderResourceAttribs::ResourceType::InputAttachment:      return ResourceClass::InputAttachment;
+        case SPIRVShaderResourceAttribs::ResourceType::AccelerationStructure:return ResourceClass::AccelStruct;
+        case SPIRVShaderResourceAttribs::ResourceType::PushConstant:         return ResourceClass::PushConstant;
+        // clang-format on
+        default:
+            UNEXPECTED("Unknown resource type");
+            return ResourceClass::NumClasses;
+    }
+}
+
+const SPIRVShaderResourceAttribs* SPIRVShaderResources::GetResourceByName(ResourceClass ResClass, const char* Name) const noexcept
+{
+    if (Name == nullptr)
+    {
+        UNEXPECTED("Name must not be null");
+        return nullptr;
+    }
+
+    Uint32 NumResources = GetNumResources(ResClass);
+    for (Uint32 i = 0; i < NumResources; ++i)
+    {
+        const SPIRVShaderResourceAttribs& ResAttribs = GetResAttribs(ResClass, i);
+        if (std::strcmp(ResAttribs.Name, Name) == 0)
+            return &ResAttribs;
+    }
+    return nullptr;
+}
+
+const SPIRVShaderResourceAttribs* SPIRVShaderResources::GetResourceByName(SPIRVShaderResourceAttribs::ResourceType ResType, const char* Name) const noexcept
+{
+    ResourceClass ResClass = ResourceTypeToClass(ResType);
+    if (const SPIRVShaderResourceAttribs* pRes = GetResourceByName(ResClass, Name))
+    {
+        if (pRes->Type == ResType)
+            return pRes;
+    }
+    return nullptr;
+}
+
+const SPIRVShaderResourceAttribs* SPIRVShaderResources::GetResourceByName(const char* Name) const noexcept
+{
+    if (Name == nullptr)
+    {
+        UNEXPECTED("Name must not be null");
+        return nullptr;
+    }
+
+    for (Uint32 i = 0; i < GetTotalResources(); ++i)
+    {
+        const SPIRVShaderResourceAttribs& ResAttribs = GetResource(i);
+        if (std::strcmp(ResAttribs.Name, Name) == 0)
+            return &ResAttribs;
+    }
+    return nullptr;
 }
 
 std::string SPIRVShaderResources::DumpResources() const
@@ -936,9 +1220,19 @@ std::string SPIRVShaderResources::DumpResources() const
         },
         [&](const SPIRVShaderResourceAttribs& SepImg, Uint32) //
         {
-            VERIFY(SepImg.Type == SPIRVShaderResourceAttribs::ResourceType::SeparateImage, "Unexpected resource type");
-            ss << std::endl
-               << std::setw(3) << ResNum << " Separate Img     ";
+            VERIFY((SepImg.Type == SPIRVShaderResourceAttribs::ResourceType::SeparateImage ||
+                    SepImg.Type == SPIRVShaderResourceAttribs::ResourceType::UniformTexelBuffer),
+                   "Unexpected resource type");
+            if (SepImg.Type == SPIRVShaderResourceAttribs::ResourceType::UniformTexelBuffer)
+            {
+                ss << std::endl
+                   << std::setw(3) << ResNum << " Uniform Txl Buff ";
+            }
+            else
+            {
+                ss << std::endl
+                   << std::setw(3) << ResNum << " Separate Img     ";
+            }
             DumpResource(SepImg);
         },
         [&](const SPIRVShaderResourceAttribs& InptAtt, Uint32) //
@@ -954,11 +1248,56 @@ std::string SPIRVShaderResources::DumpResources() const
             ss << std::endl
                << std::setw(3) << ResNum << " Accel Struct     ";
             DumpResource(AccelStruct);
+        },
+        [&](const SPIRVShaderResourceAttribs& PushConst, Uint32) //
+        {
+            VERIFY(PushConst.Type == SPIRVShaderResourceAttribs::ResourceType::PushConstant, "Unexpected resource type");
+            ss << std::endl
+               << std::setw(3) << ResNum << " Push Constant    ";
+            DumpResource(PushConst);
         } //
     );
     VERIFY_EXPR(ResNum == GetTotalResources());
 
+    if (GetNumSpecConstants() > 0)
+    {
+        ss << std::endl
+           << "Specialization constants (" << GetNumSpecConstants() << "):";
+        for (Uint32 n = 0; n < GetNumSpecConstants(); ++n)
+        {
+            const SPIRVSpecializationConstantAttribs& SC = GetSpecConstant(n);
+            ss << std::endl
+               << "  '" << SC.Name << "' SpecId=" << SC.SpecId << " Size=" << SC.Size;
+        }
+    }
+
     return ss.str();
+}
+
+
+std::shared_ptr<const SPIRVShaderResources> SPIRVShaderResources::Create(
+    IMemoryAllocator&     Allocator,
+    std::vector<uint32_t> spirv_binary,
+    const CreateInfo&     CI,
+    std::string*          pEntryPoint) noexcept(false)
+{
+    std::unique_ptr<void, STDDeleterRawMem<void>> pRawMem{
+        ALLOCATE(Allocator, "Memory for SPIRVShaderResources", SPIRVShaderResources, 1),
+        STDDeleterRawMem<void>(Allocator),
+    };
+
+    new (pRawMem.get()) SPIRVShaderResources // May throw
+        {
+            Allocator,
+            std::move(spirv_binary),
+            CI,
+            pEntryPoint,
+        };
+
+    return {
+        static_cast<SPIRVShaderResources*>(pRawMem.release()),
+        STDDeleterRawMem<SPIRVShaderResources>(Allocator),
+    };
 }
 
 } // namespace Diligent

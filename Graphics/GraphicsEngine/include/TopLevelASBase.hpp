@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2023 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -121,9 +121,9 @@ public:
 
             for (Uint32 i = 0; i < InstanceCount; ++i)
             {
-                const auto&  Inst     = pInstances[i];
-                const char*  NameCopy = this->m_StringPool.CopyString(Inst.InstanceName);
-                InstanceDesc Desc     = {};
+                const TLASBuildInstanceData& Inst     = pInstances[i];
+                const char*                  NameCopy = this->m_StringPool.CopyString(Inst.InstanceName);
+                InstanceDesc                 Desc     = {};
 
                 Desc.pBLAS                       = ClassPtrCast<BottomLevelASImplType>(Inst.pBLAS);
                 Desc.ContributionToHitGroupIndex = Inst.ContributionToHitGroupIndex;
@@ -177,8 +177,8 @@ public:
 
         for (Uint32 i = 0; i < InstanceCount; ++i)
         {
-            const auto& Inst = pInstances[i];
-            auto        Iter = this->m_Instances.find(Inst.InstanceName);
+            const TLASBuildInstanceData& Inst = pInstances[i];
+            auto                         Iter = this->m_Instances.find(Inst.InstanceName);
 
             if (Iter == this->m_Instances.end())
             {
@@ -186,9 +186,9 @@ public:
                 return false;
             }
 
-            auto&      Desc      = Iter->second;
-            const auto PrevIndex = Desc.ContributionToHitGroupIndex;
-            const auto pPrevBLAS = Desc.pBLAS;
+            InstanceDesc&                        Desc      = Iter->second;
+            const Uint32                         PrevIndex = Desc.ContributionToHitGroupIndex;
+            RefCntAutoPtr<BottomLevelASImplType> pPrevBLAS = Desc.pBLAS;
 
             Desc.pBLAS                       = ClassPtrCast<BottomLevelASImplType>(Inst.pBLAS);
             Desc.ContributionToHitGroupIndex = Inst.ContributionToHitGroupIndex;
@@ -241,32 +241,36 @@ public:
     }
 
     /// Implementation of ITopLevelAS::GetInstanceDesc().
-    virtual TLASInstanceDesc DILIGENT_CALL_TYPE GetInstanceDesc(const char* Name) const override final
+    virtual Bool DILIGENT_CALL_TYPE GetInstanceDesc(const char* Name, TLASInstanceDesc& Desc) const override final
     {
-        VERIFY_EXPR(Name != nullptr && Name[0] != '\0');
+        Desc = {};
 
-        TLASInstanceDesc Result = {};
+        if (Name == nullptr || Name[0] == '\0')
+        {
+            DEV_ERROR("Instance name must not be null or empty");
+            return false;
+        }
 
         auto Iter = this->m_Instances.find(Name);
         if (Iter != this->m_Instances.end())
         {
-            const auto& Inst                   = Iter->second;
-            Result.ContributionToHitGroupIndex = Inst.ContributionToHitGroupIndex;
-            Result.InstanceIndex               = Inst.InstanceIndex;
-            Result.pBLAS                       = Inst.pBLAS;
+            const InstanceDesc& Inst         = Iter->second;
+            Desc.ContributionToHitGroupIndex = Inst.ContributionToHitGroupIndex;
+            Desc.InstanceIndex               = Inst.InstanceIndex;
+            Desc.pBLAS                       = Inst.pBLAS;
+            return true;
         }
         else
         {
-            Result.ContributionToHitGroupIndex = INVALID_INDEX;
-            Result.InstanceIndex               = INVALID_INDEX;
+            Desc.ContributionToHitGroupIndex = INVALID_INDEX;
+            Desc.InstanceIndex               = INVALID_INDEX;
             LOG_ERROR_MESSAGE("Can't find instance with the specified name ('", Name, "')");
+            return false;
         }
-
-        return Result;
     }
 
     /// Implementation of ITopLevelAS::GetBuildInfo().
-    virtual TLASBuildInfo DILIGENT_CALL_TYPE GetBuildInfo() const override final
+    virtual const TLASBuildInfo& DILIGENT_CALL_TYPE GetBuildInfo() const override final
     {
         return m_BuildInfo;
     }
@@ -286,7 +290,7 @@ public:
     }
 
     /// Implementation of ITopLevelAS::GetScratchBufferSizes().
-    virtual ScratchBufferSizes DILIGENT_CALL_TYPE GetScratchBufferSizes() const override final
+    virtual const ScratchBufferSizes& DILIGENT_CALL_TYPE GetScratchBufferSizes() const override final
     {
         return this->m_ScratchSize;
     }
@@ -364,7 +368,7 @@ private:
             Desc.ContributionToHitGroupIndex = InstanceOffset;
             switch (BindingMode)
             {
-                // clang-format off
+                    // clang-format off
                 case HIT_GROUP_BINDING_MODE_PER_GEOMETRY:     InstanceOffset += Desc.pBLAS->GetActualGeometryCount() * HitGroupStride;                            break;
                 case HIT_GROUP_BINDING_MODE_PER_INSTANCE:     InstanceOffset += HitGroupStride;                                                                   break;
                 case HIT_GROUP_BINDING_MODE_PER_TLAS:         /* InstanceOffset is constant */                                                                  break;

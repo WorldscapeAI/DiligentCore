@@ -33,8 +33,8 @@
 #include "EngineVkImplTraits.hpp"
 #include "SwapChainVk.h"
 #include "SwapChainBase.hpp"
-#include "VulkanUtilities/VulkanInstance.hpp"
-#include "VulkanUtilities/VulkanObjectWrappers.hpp"
+#include "VulkanUtilities/Instance.hpp"
+#include "VulkanUtilities/ObjectWrappers.hpp"
 #include "ManagedVulkanObject.hpp"
 
 namespace Diligent
@@ -90,10 +90,11 @@ private:
     VkResult AcquireNextImage(DeviceContextVkImpl* pDeviceCtxVk);
     void     RecreateVulkanSwapchain(DeviceContextVkImpl* pImmediateCtxVk);
     void     ReleaseSwapChainResources(DeviceContextVkImpl* pImmediateCtxVk, bool DestroyVkSwapChain);
+    void     ThrottleFrameSubmission();
 
     const NativeWindow m_Window;
 
-    std::shared_ptr<const VulkanUtilities::VulkanInstance> m_VulkanInstance;
+    std::shared_ptr<const VulkanUtilities::Instance> m_Instance;
 
     Uint32 m_DesiredBufferCount = 0;
 
@@ -125,6 +126,7 @@ private:
     uint32_t m_BackBufferIndex = 0;
     bool     m_IsMinimized     = false;
     bool     m_VSyncEnabled    = true;
+    bool     m_ImageAcquired   = false;
     Uint32   m_FrameIndex      = 1;
 };
 

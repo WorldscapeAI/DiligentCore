@@ -53,6 +53,56 @@ namespace
 
 static constexpr Uint32 ContentVersion = 987;
 
+// Shaders for testing non-separable program binding conflict
+// VS references cbPositions + cbColors, PS references only cbColors
+// This can cause binding conflicts when separate_shader_objects is disabled
+namespace HLSL_NonSeparable
+{
+const std::string NonSeparableTest_VS{
+    R"(
+cbuffer cbPositions
+{
+    float4 g_Positions[6];
+}
+
+cbuffer cbColors
+{
+    float4 g_Colors[3];
+}
+
+struct PSInput
+{
+    float4 Pos   : SV_POSITION;
+    float3 Color : COLOR;
+};
+
+void main(uint VertexId : SV_VertexId, out PSInput PSIn)
+{
+    PSIn.Pos   = g_Positions[VertexId];
+    PSIn.Color = g_Colors[VertexId % 3u].rgb;
+}
+)"};
+
+const std::string NonSeparableTest_PS{
+    R"(
+struct PSInput
+{
+    float4 Pos   : SV_POSITION;
+    float3 Color : COLOR;
+};
+
+cbuffer cbColors
+{
+    float4 g_Colors[3];
+}
+
+float4 main(in PSInput PSIn) : SV_Target
+{
+    return float4(PSIn.Color * g_Colors[0].a, 1.0);
+}
+)"};
+} // namespace HLSL_NonSeparable
+
 PipelineResourceLayoutDesc GetGraphicsPSOLayout()
 {
     PipelineResourceLayoutDesc Layout;
@@ -249,7 +299,15 @@ RefCntAutoPtr<IRenderStateCache> CreateCache(IRenderDevice*                   pD
                                              IDataBlob*                       pCacheData           = nullptr,
                                              IShaderSourceInputStreamFactory* pShaderReloadFactory = nullptr)
 {
-    RenderStateCacheCreateInfo CacheCI{pDevice, RENDER_STATE_CACHE_LOG_LEVEL_VERBOSE, HotReload, OptimizeGLShaders, pShaderReloadFactory};
+    RenderStateCacheCreateInfo CacheCI{
+        pDevice,
+        GPUTestingEnvironment::GetInstance()->GetArchiverFactory(),
+        RENDER_STATE_CACHE_LOG_LEVEL_VERBOSE,
+        RENDER_STATE_CACHE_FILE_HASH_MODE_BY_CONTENT,
+        HotReload,
+        OptimizeGLShaders,
+        pShaderReloadFactory,
+    };
 
     RefCntAutoPtr<IRenderStateCache> pCache;
     CreateRenderStateCache(CacheCI, &pCache);
@@ -834,6 +892,58 @@ TEST(RenderStateCacheTest, CreateComputePSO_Async)
 TEST(RenderStateCacheTest, CreateComputePSO_Sign_Async)
 {
     TestComputePSO(/*UseSignature = */ true, /*CompileAsync = */ true);
+}
+
+
+TEST(RenderStateCacheTest, CacheByFileName)
+{
+    GPUTestingEnvironment* pEnv    = GPUTestingEnvironment::GetInstance();
+    IRenderDevice*         pDevice = pEnv->GetDevice();
+
+    GPUTestingEnvironment::ScopedReset AutoReset;
+
+    RefCntAutoPtr<IShaderSourceInputStreamFactory> pShaderSourceFactory;
+    pDevice->GetEngineFactory()->CreateDefaultShaderSourceStreamFactory("shaders/RenderStateCache", &pShaderSourceFactory);
+    ASSERT_TRUE(pShaderSourceFactory);
+
+    RefCntAutoPtr<ITextureView> pTexSRV = CreateWhiteTexture();
+    ASSERT_TRUE(pTexSRV);
+
+    RenderStateCacheCreateInfo CacheCI{
+        pDevice,
+        GPUTestingEnvironment::GetInstance()->GetArchiverFactory(),
+        RENDER_STATE_CACHE_LOG_LEVEL_VERBOSE,
+        RENDER_STATE_CACHE_FILE_HASH_MODE_BY_NAME,
+    };
+
+    RefCntAutoPtr<IDataBlob> pData;
+    for (Uint32 pass = 0; pass < 2; ++pass)
+    {
+        RefCntAutoPtr<IRenderStateCache> pCache;
+        CreateRenderStateCache(CacheCI, &pCache);
+        ASSERT_TRUE(pCache);
+
+        if (pData != nullptr)
+            pCache->Load(pData, ContentVersion);
+
+        RefCntAutoPtr<IShader> pVS, pPS;
+        CreateGraphicsShaders(pCache, pass == 0 ? pShaderSourceFactory.RawPtr() : nullptr, SHADER_COMPILE_FLAG_NONE, pVS, pPS, /*PresentInCache = */ pData != nullptr);
+        ASSERT_NE(pVS, nullptr);
+        ASSERT_NE(pPS, nullptr);
+
+        VerifyGraphicsShaders(pVS, pPS, pTexSRV);
+
+        RefCntAutoPtr<IShader> pVS2, pPS2;
+        CreateGraphicsShaders(pCache, nullptr, SHADER_COMPILE_FLAG_NONE, pVS2, pPS2, /*PresentInCache = */ true);
+        EXPECT_EQ(pVS, pVS2);
+        EXPECT_EQ(pPS, pPS);
+
+        if (pass == 0)
+        {
+            pCache->WriteToBlob(ContentVersion, &pData);
+            ASSERT_NE(pData, nullptr);
+        }
+    }
 }
 
 void CreateRayTracingShaders(IRenderStateCache*               pCache,
@@ -1735,6 +1845,77 @@ TEST(RenderStateCacheTest, GLExtensions)
             }
         }
     }
+}
+
+TEST(RenderStateCacheTest, NonSeparableProgramBindingConflict)
+{
+    // This test reproduces the issue where VS and PS assign different
+    // binding indices to shared uniform blocks when separate_shader_objects
+    // is disabled, causing GL link errors.
+    //
+    // VS: cbPositions + cbColors
+    // PS: cbColors only
+    //
+    // Without the fix in Archiver_GL.cpp, SPIRV-Cross emits:
+    //   VS: cbPositions->binding 0, cbColors->binding 1
+    //   PS: cbColors->binding 0
+    // causing "buffer block with binding 0 has mismatching definitions"
+
+    auto* pEnv    = GPUTestingEnvironment::GetInstance();
+    auto* pDevice = pEnv->GetDevice();
+
+    if (!pDevice->GetDeviceInfo().IsGLDevice())
+    {
+        GTEST_SKIP() << "This test is only applicable to OpenGL backend";
+    }
+
+    GPUTestingEnvironment::ScopedReset AutoReset;
+
+    auto pCache = CreateCache(pDevice, /*HotReload=*/false);
+    ASSERT_TRUE(pCache);
+
+    ShaderCreateInfo ShaderCI;
+    ShaderCI.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
+    ShaderCI.ShaderCompiler = pEnv->GetDefaultCompiler(ShaderCI.SourceLanguage);
+
+    RefCntAutoPtr<IShader> pVS, pPS;
+
+    // Create VS with cbPositions + cbColors
+    {
+        ShaderCI.Desc       = {"NonSeparable Test VS", SHADER_TYPE_VERTEX, true};
+        ShaderCI.EntryPoint = "main";
+        ShaderCI.Source     = HLSL_NonSeparable::NonSeparableTest_VS.c_str();
+        pCache->CreateShader(ShaderCI, &pVS);
+        ASSERT_NE(pVS, nullptr);
+    }
+
+    // Create PS with only cbColors
+    {
+        ShaderCI.Desc       = {"NonSeparable Test PS", SHADER_TYPE_PIXEL, true};
+        ShaderCI.EntryPoint = "main";
+        ShaderCI.Source     = HLSL_NonSeparable::NonSeparableTest_PS.c_str();
+        pCache->CreateShader(ShaderCI, &pPS);
+        ASSERT_NE(pPS, nullptr);
+    }
+
+    // Create PSO - this will fail if binding conflict occurs
+    auto* pSwapChain = pEnv->GetSwapChain();
+
+    GraphicsPipelineStateCreateInfo PsoCI;
+    PsoCI.PSODesc.Name = "NonSeparable Binding Conflict Test";
+
+    PsoCI.pVS = pVS;
+    PsoCI.pPS = pPS;
+
+    PsoCI.GraphicsPipeline.NumRenderTargets             = 1;
+    PsoCI.GraphicsPipeline.RTVFormats[0]                = pSwapChain->GetDesc().ColorBufferFormat;
+    PsoCI.GraphicsPipeline.DepthStencilDesc.DepthEnable = False;
+    PsoCI.GraphicsPipeline.PrimitiveTopology            = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    RefCntAutoPtr<IPipelineState> pPSO;
+    pCache->CreateGraphicsPipelineState(PsoCI, &pPSO);
+    ASSERT_NE(pPSO, nullptr) << "PSO creation failed - likely due to binding conflict in non-separable program";
+    ASSERT_EQ(pPSO->GetStatus(), PIPELINE_STATE_STATUS_READY);
 }
 
 } // namespace

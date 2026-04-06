@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2025 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -137,9 +137,9 @@ private:
             const GLProgram::LinkStatus LinkStatus = m_Program->GetLinkStatus(WaitForCompletion);
             if (LinkStatus == GLProgram::LinkStatus::Succeeded)
             {
-                auto pImmediateCtx = pDevice->GetImmediateContext(0);
+                RefCntAutoPtr<DeviceContextGLImpl> pImmediateCtx = pDevice->GetImmediateContext(0);
                 VERIFY_EXPR(pImmediateCtx);
-                auto& GLState = pImmediateCtx->GetContextState();
+                GLContextState& GLState = pImmediateCtx->GetContextState();
 
                 m_Shader.m_pShaderResources = m_Program->LoadResources(
                     m_Shader.m_Desc.ShaderType,
@@ -221,8 +221,8 @@ ShaderGLImpl::ShaderGLImpl(IReferenceCounters*     pRefCounters,
     DEV_CHECK_ERR(ShaderCI.ByteCode == nullptr, "'ByteCode' must be null when shader is created from the source code or a file");
     DEV_CHECK_ERR(ShaderCI.ShaderCompiler == SHADER_COMPILER_DEFAULT, "only default compiler is supported in OpenGL");
 
-    const auto& DeviceInfo  = GLShaderCI.DeviceInfo;
-    const auto& AdapterInfo = GLShaderCI.AdapterInfo;
+    const RenderDeviceInfo&    DeviceInfo  = GLShaderCI.DeviceInfo;
+    const GraphicsAdapterInfo& AdapterInfo = GLShaderCI.AdapterInfo;
 
     // Build the full source code string that will contain GLSL version declaration,
     // platform definitions, user-provided shader macros, etc.
@@ -262,8 +262,6 @@ ShaderGLImpl::ShaderGLImpl(IReferenceCounters*     pRefCounters,
 ShaderGLImpl::~ShaderGLImpl()
 {
 }
-
-IMPLEMENT_QUERY_INTERFACE2(ShaderGLImpl, IID_ShaderGL, IID_InternalImpl, TShaderBase)
 
 void ShaderGLImpl::CompileShader() noexcept
 {
@@ -319,7 +317,7 @@ bool ShaderGLImpl::GetCompileStatus(IDataBlob** ppCompilerOutput, bool ThrowOnEr
             if (ppCompilerOutput != nullptr)
             {
                 // InfoLogLen accounts for null terminator
-                auto pOutputDataBlob = DataBlobImpl::Create(InfoLogLen + m_GLSLSourceString.length() + 1);
+                RefCntAutoPtr<DataBlobImpl> pOutputDataBlob = DataBlobImpl::Create(InfoLogLen + m_GLSLSourceString.length() + 1);
 
                 char* DataPtr = pOutputDataBlob->GetDataPtr<char>();
                 if (!InfoLog.empty())
@@ -330,7 +328,7 @@ bool ShaderGLImpl::GetCompileStatus(IDataBlob** ppCompilerOutput, bool ThrowOnEr
                 // Copy source code including null terminator
                 memcpy(DataPtr + InfoLogLen, m_GLSLSourceString.data(), m_GLSLSourceString.length() + 1);
 
-                pOutputDataBlob->QueryInterface(IID_DataBlob, reinterpret_cast<IObject**>(ppCompilerOutput));
+                pOutputDataBlob->QueryInterface(IID_DataBlob, ppCompilerOutput);
             }
         }
     }

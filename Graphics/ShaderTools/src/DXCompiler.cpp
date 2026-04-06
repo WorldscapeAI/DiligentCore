@@ -101,6 +101,11 @@ public:
         return m_Library.GetVersion();
     }
 
+    virtual const std::string& GetLibraryName() const override final
+    {
+        return m_Library.GetLibName();
+    }
+
     bool Compile(const CompileAttribs& Attribs) override final;
 
     virtual void Compile(const ShaderCreateInfo& ShaderCI,
@@ -1381,7 +1386,12 @@ void DXCompilerImpl::PatchResourceDeclaration(const TResourceBindingMap& Resourc
         // undef, !"", i32 -1,
         //           ^
         const size_t BindingRecordStart = pos + 1;
-        VERIFY_EXPR(DXIL[BindingRecordStart] == ',');
+        if (DXIL[BindingRecordStart] != ',')
+        {
+            // This is not a resource declaration record, continue searching.
+            pos = BindingRecordStart;
+            continue;
+        }
 
         // Parse resource class.
         pos = DXIL.rfind(ResourceRecStart, EndOfResTypeRecord);

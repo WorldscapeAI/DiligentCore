@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -191,18 +191,18 @@ DILIGENT_TYPED_ENUM(USAGE, Uint8)
 
     /// A resource that requires read and write access by the GPU and can also be occasionally
     /// written by the CPU.  \n
-    /// D3D11 Counterpart: D3D11_USAGE_DEFAULT. OpenGL counterpart: GL_DYNAMIC_DRAW.
+    /// D3D11 Counterpart: D3D11_USAGE_DEFAULT. OpenGL counterpart: GL_STREAM_DRAW.
     /// \remarks Default buffers do not allow CPU access and must use CPU_ACCESS_NONE flag.
     USAGE_DEFAULT,
 
     /// A resource that can be read by the GPU and written at least once per frame by the CPU.  \n
-    /// D3D11 Counterpart: D3D11_USAGE_DYNAMIC. OpenGL counterpart: GL_STREAM_DRAW
+    /// D3D11 Counterpart: D3D11_USAGE_DYNAMIC. OpenGL counterpart: GL_DYNAMIC_DRAW
     /// \remarks Dynamic buffers must use CPU_ACCESS_WRITE flag.
     USAGE_DYNAMIC,
 
     /// A resource that facilitates transferring data between GPU and CPU. \n
-    /// D3D11 Counterpart: D3D11_USAGE_STAGING. OpenGL counterpart: GL_STATIC_READ or
-    /// GL_STATIC_COPY depending on the CPU access flags.
+    /// D3D11 Counterpart: D3D11_USAGE_STAGING. OpenGL counterpart: GL_STREAM_READ or
+    /// GL_STREAM_DRAW depending on the CPU access flags.
     /// \remarks Staging buffers must use exactly one of CPU_ACCESS_WRITE or CPU_ACCESS_READ flags.
     USAGE_STAGING,
 
@@ -1856,6 +1856,17 @@ struct DeviceFeatures
     /// Indicates if device supports formatted buffers.
     DEVICE_FEATURE_STATE FormattedBuffers       DEFAULT_INITIALIZER(DEVICE_FEATURE_STATE_DISABLED);
 
+    /// Indicates if device supports pipeline specialization constants.
+
+    /// When this feature is enabled, applications can provide specialization
+    /// constants when creating a pipeline state to set constant values at
+    /// pipeline creation time. The driver may use these values to optimize
+    /// the compiled shader code.
+    ///
+	/// Supported by Vulkan and WebGPU backends.
+	/// Not supported by D3D11, D3D12, OpenGL, or Metal backends.
+    DEVICE_FEATURE_STATE SpecializationConstants DEFAULT_INITIALIZER(DEVICE_FEATURE_STATE_DISABLED);
+
 #if DILIGENT_CPP_INTERFACE
     constexpr DeviceFeatures() noexcept {}
 
@@ -1906,11 +1917,12 @@ struct DeviceFeatures
 	Handler(TextureSubresourceViews)		   \
 	Handler(NativeMultiDraw)                   \
     Handler(AsyncShaderCompilation)			   \
-	Handler(FormattedBuffers)
+	Handler(FormattedBuffers)                  \
+    Handler(SpecializationConstants)
 
     explicit constexpr DeviceFeatures(DEVICE_FEATURE_STATE State) noexcept
     {
-        static_assert(sizeof(*this) == 47, "Did you add a new feature to DeviceFeatures? Please add it to ENUMERATE_DEVICE_FEATURES.");
+        static_assert(sizeof(*this) == 48, "Did you add a new feature to DeviceFeatures? Please add it to ENUMERATE_DEVICE_FEATURES.");
     #define INIT_FEATURE(Feature) Feature = State;
         ENUMERATE_DEVICE_FEATURES(INIT_FEATURE)
     #undef INIT_FEATURE
@@ -2216,19 +2228,34 @@ typedef struct WaveOpProperties WaveOpProperties;
 /// Buffer properties
 struct BufferProperties
 {
-    /// The minimum required alignment, in bytes, for the constant buffer offsets.
-
-    /// The Offset parameter passed to IShaderResourceVariable::SetBufferRange() or to
-    /// IShaderResourceVariable::SetBufferOffset() method used to set the offset of a
-    /// constant buffer, must be an integer multiple of this limit.
+    /// Minimum required alignment, in bytes, for constant buffer offsets.
+    ///
+    /// The `Offset` parameter passed to `IShaderResourceVariable::SetBufferRange()`
+    /// or `IShaderResourceVariable::SetBufferOffset()` for a constant buffer must be
+    /// a multiple of this value.
     Uint32 ConstantBufferOffsetAlignment DEFAULT_INITIALIZER(0);
 
-    /// The minimum required alignment, in bytes, for the structured buffer offsets.
-
-    /// The ByteOffset member of the BufferViewDesc used to create a structured buffer view or
-    /// the Offset parameter passed to IShaderResourceVariable::SetBufferOffset() method used to
-    /// set the offset of a structured buffer, must be an integer multiple of this limit.
+    /// Minimum required alignment, in bytes, for structured buffer offsets.
+    ///
+    /// The `ByteOffset` member of `BufferViewDesc` used to create a structured buffer
+    /// view, or the `Offset` parameter passed to
+    /// `IShaderResourceVariable::SetBufferOffset()` for a structured buffer, must be
+    /// a multiple of this value.
     Uint32 StructuredBufferOffsetAlignment DEFAULT_INITIALIZER(0);
+
+    /// Minimum required alignment, in bytes, for source buffer offsets used by
+    /// `IDeviceContext::UpdateTexture()`.
+    ///
+    /// When `TextureSubResData::pSrcBuffer` is not null, the
+    /// `TextureSubResData::SrcOffset` member must be a multiple of this value.
+    Uint32 TextureUpdateOffsetAlignment DEFAULT_INITIALIZER(0);
+
+    /// Minimum required alignment, in bytes, for source buffer row strides used by
+    /// `IDeviceContext::UpdateTexture()`.
+    ///
+    /// When `TextureSubResData::pSrcBuffer` is not null, the
+    /// `TextureSubResData::Stride` member must be a multiple of this value.
+    Uint32 TextureUpdateStrideAlignment DEFAULT_INITIALIZER(0);
 
 #if DILIGENT_CPP_INTERFACE
     /// Comparison operator tests if two structures are equivalent
@@ -2240,10 +2267,11 @@ struct BufferProperties
     constexpr bool operator==(const BufferProperties& RHS) const
     {
         return ConstantBufferOffsetAlignment   == RHS.ConstantBufferOffsetAlignment &&
-               StructuredBufferOffsetAlignment == RHS.StructuredBufferOffsetAlignment;
+               StructuredBufferOffsetAlignment == RHS.StructuredBufferOffsetAlignment &&
+               TextureUpdateOffsetAlignment == RHS.TextureUpdateOffsetAlignment &&
+               TextureUpdateStrideAlignment == RHS.TextureUpdateStrideAlignment;
     }
 #endif
-
 };
 typedef struct BufferProperties BufferProperties;
 
@@ -3516,10 +3544,6 @@ struct EngineCreateInfo
 
     /// Validation options, see Diligent::VALIDATION_FLAGS.
     VALIDATION_FLAGS    ValidationFlags             DEFAULT_INITIALIZER(VALIDATION_FLAG_NONE);
-
-    /// Pointer to the raw memory allocator that will be used for all memory allocation/deallocation
-    /// operations in the engine
-    struct IMemoryAllocator* pRawMemAllocator       DEFAULT_INITIALIZER(nullptr);
 
     /// An optional thread pool for asynchronous shader and pipeline state compilation.
     ///

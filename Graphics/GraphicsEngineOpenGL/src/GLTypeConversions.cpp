@@ -72,7 +72,7 @@ public:
         m_FmtToGLFmtMap[TEX_FORMAT_R32G8X24_TYPELESS]      = GL_DEPTH32F_STENCIL8;
         m_FmtToGLFmtMap[TEX_FORMAT_D32_FLOAT_S8X24_UINT]   = GL_DEPTH32F_STENCIL8;
         m_FmtToGLFmtMap[TEX_FORMAT_R32_FLOAT_X8X24_TYPELESS]=GL_DEPTH32F_STENCIL8;
-        m_FmtToGLFmtMap[TEX_FORMAT_X32_TYPELESS_G8X24_UINT]= 0;//GL_DEPTH32F_STENCIL8;
+        m_FmtToGLFmtMap[TEX_FORMAT_X32_TYPELESS_G8X24_UINT]= GL_DEPTH32F_STENCIL8;
 
         m_FmtToGLFmtMap[TEX_FORMAT_RGB10A2_TYPELESS]       = GL_RGB10_A2;
         m_FmtToGLFmtMap[TEX_FORMAT_RGB10A2_UNORM]          = GL_RGB10_A2;
@@ -102,7 +102,7 @@ public:
         m_FmtToGLFmtMap[TEX_FORMAT_R24G8_TYPELESS]         = GL_DEPTH24_STENCIL8;
         m_FmtToGLFmtMap[TEX_FORMAT_D24_UNORM_S8_UINT]      = GL_DEPTH24_STENCIL8;
         m_FmtToGLFmtMap[TEX_FORMAT_R24_UNORM_X8_TYPELESS]  = GL_DEPTH24_STENCIL8;
-        m_FmtToGLFmtMap[TEX_FORMAT_X24_TYPELESS_G8_UINT]   = 0;//GL_DEPTH24_STENCIL8;
+        m_FmtToGLFmtMap[TEX_FORMAT_X24_TYPELESS_G8_UINT]   = GL_DEPTH24_STENCIL8;
 
         m_FmtToGLFmtMap[TEX_FORMAT_RG8_TYPELESS]           = GL_RG8;
         m_FmtToGLFmtMap[TEX_FORMAT_RG8_UNORM]              = GL_RG8;
@@ -195,7 +195,7 @@ GLenum TexFormatToGLInternalTexFormat(TEXTURE_FORMAT TexFormat, Uint32 BindFlags
     static const FormatToGLInternalTexFormatMap FormatMap;
     if (TexFormat >= TEX_FORMAT_UNKNOWN && TexFormat < TEX_FORMAT_NUM_FORMATS)
     {
-        auto GLFormat = FormatMap[TexFormat];
+        GLenum GLFormat = FormatMap[TexFormat];
         if (BindFlags != 0)
             GLFormat = CorrectGLTexFormat(GLFormat, BindFlags);
         return GLFormat;
@@ -217,7 +217,7 @@ public:
     {
         for (TEXTURE_FORMAT TexFmt = TEX_FORMAT_UNKNOWN; TexFmt < TEX_FORMAT_NUM_FORMATS; TexFmt = static_cast<TEXTURE_FORMAT>(static_cast<int>(TexFmt) + 1))
         {
-            auto ComponentType = GetTextureFormatAttribs(TexFmt).ComponentType;
+            COMPONENT_TYPE ComponentType = GetTextureFormatAttribs(TexFmt).ComponentType;
             if (ComponentType == COMPONENT_TYPE_UNDEFINED ||
                 ComponentType == COMPONENT_TYPE_DEPTH_STENCIL || // Skip depth-stencil
                 TexFmt == TEX_FORMAT_RGB10A2_TYPELESS ||         // and typeless formats
@@ -235,7 +235,7 @@ public:
                 continue;
             }
 
-            auto GlTexFormat = TexFormatToGLInternalTexFormat(TexFmt);
+            GLenum GlTexFormat = TexFormatToGLInternalTexFormat(TexFmt);
             if (GlTexFormat != 0)
             {
                 VERIFY_EXPR(m_FormatMap.find(GlTexFormat) == m_FormatMap.end());
@@ -745,7 +745,7 @@ SHADER_TYPE GLShaderBitsToShaderTypes(GLenum ShaderBits)
     SHADER_TYPE Result = SHADER_TYPE_UNKNOWN;
     while (ShaderBits != 0)
     {
-        auto Type = ExtractLSB(ShaderBits);
+        GLenum Type = ExtractLSB(ShaderBits);
         switch (Type)
         {
             // clang-format off
@@ -766,7 +766,7 @@ WAVE_FEATURE GLSubgroupFeatureBitsToWaveFeatures(GLenum FeatureBits)
     WAVE_FEATURE Result = WAVE_FEATURE_UNKNOWN;
     while (FeatureBits != 0)
     {
-        auto Feature = ExtractLSB(FeatureBits);
+        GLenum Feature = ExtractLSB(FeatureBits);
         switch (Feature)
         {
             // clang-format off

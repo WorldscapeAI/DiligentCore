@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -309,7 +309,6 @@ void EngineFactoryD3D12Impl::CreateDeviceAndContextsD3D12(const EngineD3D12Creat
     try
     {
         ValidateD3D12CreateInfo(EngineCI);
-        SetRawAllocator(EngineCI.pRawMemAllocator);
 
         // Enable the D3D12 debug layer.
         if (EngineCI.EnableValidation)
@@ -601,7 +600,6 @@ void EngineFactoryD3D12Impl::AttachToD3D12Device(void*                        pd
 
     try
     {
-        SetRawAllocator(EngineCI.pRawMemAllocator);
         IMemoryAllocator&      RawMemAllocator = GetRawAllocator();
         ID3D12Device*          d3d12Device     = reinterpret_cast<ID3D12Device*>(pd3d12NativeDevice);
         CComPtr<IDXGIAdapter1> pDXGIAdapter1   = DXGIAdapterFromD3D12Device(d3d12Device);
@@ -613,7 +611,7 @@ void EngineFactoryD3D12Impl::AttachToD3D12Device(void*                        pd
 
         RenderDeviceD3D12Impl* pRenderDeviceD3D12{
             NEW_RC_OBJ(RawMemAllocator, "RenderDeviceD3D12Impl instance", RenderDeviceD3D12Impl)(RawMemAllocator, this, EngineCI, AdapterInfo, d3d12Device, CommandQueueCount, ppCommandQueues)};
-        pRenderDeviceD3D12->QueryInterface(IID_RenderDevice, reinterpret_cast<IObject**>(ppDevice));
+        pRenderDeviceD3D12->QueryInterface(IID_RenderDevice, ppDevice);
 
         for (Uint32 CtxInd = 0; CtxInd < NumImmediateContexts; ++CtxInd)
         {
@@ -632,7 +630,7 @@ void EngineFactoryD3D12Impl::AttachToD3D12Device(void*                        pd
                     )};
             // We must call AddRef() (implicitly through QueryInterface()) because pRenderDeviceD3D12 will
             // keep a weak reference to the context
-            pImmediateCtxD3D12->QueryInterface(IID_DeviceContext, reinterpret_cast<IObject**>(ppContexts + CtxInd));
+            pImmediateCtxD3D12->QueryInterface(IID_DeviceContext, ppContexts + CtxInd);
             pRenderDeviceD3D12->SetImmediateContext(CtxInd, pImmediateCtxD3D12);
         }
 
@@ -682,7 +680,7 @@ void EngineFactoryD3D12Impl::CreateSwapChainD3D12(IRenderDevice*            pDev
         IMemoryAllocator&       RawMemAllocator     = GetRawAllocator();
 
         SwapChainD3D12Impl* pSwapChainD3D12 = NEW_RC_OBJ(RawMemAllocator, "SwapChainD3D12Impl instance", SwapChainD3D12Impl)(SCDesc, FSDesc, pDeviceD3D12, pDeviceContextD3D12, Window);
-        pSwapChainD3D12->QueryInterface(IID_SwapChain, reinterpret_cast<IObject**>(ppSwapChain));
+        pSwapChainD3D12->QueryInterface(IID_SwapChain, ppSwapChain);
     }
     catch (const std::runtime_error&)
     {
@@ -1048,7 +1046,9 @@ GraphicsAdapterInfo EngineFactoryD3D12Impl::GetGraphicsAdapterInfo(void*        
             BufferProperties& BufferProps{AdapterInfo.Buffer};
             BufferProps.ConstantBufferOffsetAlignment   = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
             BufferProps.StructuredBufferOffsetAlignment = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT;
-            ASSERT_SIZEOF(BufferProps, 8, "Did you add a new member to BufferProperites? Please initialize it here.");
+            BufferProps.TextureUpdateOffsetAlignment    = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
+            BufferProps.TextureUpdateStrideAlignment    = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT;
+            ASSERT_SIZEOF(BufferProps, 16, "Did you add a new member to BufferProperites? Please initialize it here.");
         }
     }
 
@@ -1108,7 +1108,7 @@ GraphicsAdapterInfo EngineFactoryD3D12Impl::GetGraphicsAdapterInfo(void*        
         ASSERT_SIZEOF(DrawCommandProps, 12, "Did you add a new member to DrawCommandProperties? Please initialize it here.");
     }
 
-    ASSERT_SIZEOF(DeviceFeatures, 47, "Did you add a new feature to DeviceFeatures? Please handle its status here.");
+    ASSERT_SIZEOF(DeviceFeatures, 48, "Did you add a new feature to DeviceFeatures? Please handle its status here.");
 
     return AdapterInfo;
 }

@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -168,11 +168,21 @@ struct WindowsMisc : public BasicPlatformMisc
     /// On failure, returns 0.
     static Uint64 SetCurrentThreadAffinity(Uint64 Mask);
 
+    /// Sets the current process affinity mask.
+    /// On success, returns true. On failure, returns false and the affinity mask is not changed.
+    static Bool SetProcessAffinity(Uint64 Mask);
+
+    /// Returns the process affinity mask. On failure, returns 0.
+    static Uint64 GetProcessAffinity();
+
     static ThreadPriority GetCurrentThreadPriority();
 
     /// Sets the current thread priority and on success returns the previous priority.
     /// On failure, returns ThreadPriority::Unknown.
     static ThreadPriority SetCurrentThreadPriority(ThreadPriority Priority);
+
+    /// Sets the name of the current thread.
+    static void SetCurrentThreadName(const char* Name);
 #endif
 };
 

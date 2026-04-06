@@ -2,7 +2,35 @@ cmake_minimum_required (VERSION 3.10)
 
 project(Diligent-GraphicsEngineD3DBase CXX)
 
-set(DILIGENT_NVAPI_PATH "" CACHE PATH "Path to NVAPI to enable D3D11/D3D12 extensions")
+if (PLATFORM_WIN32)
+    if (DILIGENT_NVAPI_PATH)
+        if (NOT EXISTS "${DILIGENT_NVAPI_PATH}/nvapi.h")
+            message(WARNING
+                "DILIGENT_NVAPI_PATH does not look like NVAPI (missing nvapi.h): ${DILIGENT_NVAPI_PATH}\n"
+                "Will ignore it and download NVAPI instead."
+            )
+            unset(DILIGENT_NVAPI_PATH CACHE)
+        endif()
+    endif()
+
+    if (NOT DILIGENT_NVAPI_PATH AND (TARGET_CPU STREQUAL "x86_64" OR TARGET_CPU STREQUAL "x86"))
+        message(STATUS "Downloading NVAPI repository...")
+
+        include(FetchContent)
+        FetchContent_Declare(
+            nvapi
+            GIT_REPOSITORY https://github.com/NVIDIA/nvapi
+            GIT_TAG        9296d67 # R590
+        )
+        FetchContent_MakeAvailable(nvapi)
+
+        set(DILIGENT_NVAPI_PATH
+            "${nvapi_SOURCE_DIR}"
+            CACHE PATH "Path to NVAPI to enable D3D11/D3D12 extensions"
+            FORCE
+        )
+    endif()
+endif()
 
 set(INCLUDE
     include/D3DCommonTypeConversions.hpp
@@ -14,6 +42,7 @@ set(INCLUDE
     include/D3DViewDescConversionImpl.hpp
     include/DXGITypeConversions.hpp
     include/EngineFactoryD3DBase.hpp
+    include/PipelineStateD3DBase.hpp
     include/RenderDeviceD3DBase.hpp
     include/ShaderD3DBase.hpp
     include/ShaderResources.hpp
@@ -70,39 +99,6 @@ set_target_properties(Diligent-GraphicsEngineD3DBase PROPERTIES
 if(DILIGENT_INSTALL_CORE)
     install_core_lib(Diligent-GraphicsEngineD3DBase)
 endif()
-
-# Set paths to D3Dcompiler_47.dll, dxcompiler.dll, and dxil.dll
-if(MSVC)
-    if (${CMAKE_SIZEOF_VOID_P} EQUAL 8)
-        set(ARCH_SUFFIX "x64")
-    else()
-        set(ARCH_SUFFIX "x86")
-    endif()
-
-    # Note that CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION is stated to be defined when targeting Windows 10
-    # and above, however it is also defined when targeting 8.1 and Visual Studio 2019 (but not VS2017)
-    if("${WINDOWS_SDK_VERSION}" VERSION_GREATER_EQUAL "10.0")
-        if (DEFINED CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
-            # Note that VS_WINDOWS_SDK_BIN_DIR as well as all derived paths can only be used in Visual Studio
-            # commands and are not valid paths during CMake configuration
-            set(VS_WINDOWS_SDK_BIN_DIR "$(WindowsSdkDir)\\bin\\${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}\\${ARCH_SUFFIX}")
-
-            set(VS_D3D_COMPILER_PATH "\"${VS_WINDOWS_SDK_BIN_DIR}\\D3Dcompiler_47.dll\"" CACHE INTERNAL "D3Dcompiler_47.dll path")
-
-            # DXC is only present in Windows SDK starting with version 10.0.17763.0
-            if(${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION} VERSION_GREATER_EQUAL "10.0.17763.0")
-                set(VS_DXC_COMPILER_PATH "\"${VS_WINDOWS_SDK_BIN_DIR}\\dxcompiler.dll\"" CACHE INTERNAL "dxcompiler.dll path")
-                set(VS_DXIL_SIGNER_PATH  "\"${VS_WINDOWS_SDK_BIN_DIR}\\dxil.dll\"" CACHE INTERNAL "dxil.dll path")
-            endif()
-        endif()
-    elseif("${WINDOWS_SDK_VERSION}" VERSION_EQUAL "8.1")
-        # D3Dcompiler_47.dll from Win8.1 SDK is ancient (from 2013) and fails to
-        # compile a number of test shaders. Use the compiler from Visual Studio
-        # executable path instead
-        set(VS_D3D_COMPILER_PATH "\"$(VC_ExecutablePath_x64_${ARCH_SUFFIX})\\D3Dcompiler_47.dll\"" CACHE INTERNAL "D3Dcompiler_47.dll path")
-    endif()
-endif()
-
 
 if(EXISTS "${DILIGENT_NVAPI_PATH}/nvapi.h")
     message(STATUS "Using NVApi from ${DILIGENT_NVAPI_PATH}")

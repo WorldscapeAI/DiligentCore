@@ -389,8 +389,6 @@ TextureBaseGL::~TextureBaseGL()
     GetDevice()->OnReleaseTexture(this);
 }
 
-IMPLEMENT_QUERY_INTERFACE(TextureBaseGL, IID_TextureGL, TTextureBase)
-
 void TextureBaseGL::CreateViewInternal(const TextureViewDesc& OrigViewDesc, ITextureView** ppView, bool bIsDefaultView)
 {
     VERIFY(ppView != nullptr, "Null pointer provided");
@@ -493,6 +491,28 @@ void TextureBaseGL::CreateViewInternal(const TextureViewDesc& OrigViewDesc, ITex
                 DEV_CHECK_GL_ERROR_AND_THROW("Failed to create texture view");
                 pViewOGL->SetBindTarget(GLViewTarget);
 
+                if (ViewDesc.Format == TEX_FORMAT_X24_TYPELESS_G8_UINT || ViewDesc.Format == TEX_FORMAT_X32_TYPELESS_G8X24_UINT)
+                {
+                    const TextureFormatInfo& FmtInfo = pDeviceGLImpl->GetTextureFormatInfo(ViewDesc.Format);
+
+                    if (FmtInfo.Supported)
+                    {
+                        RefCntAutoPtr<DeviceContextGLImpl> pDeviceContext = pDeviceGLImpl->GetImmediateContext(0);
+                        VERIFY(pDeviceContext, "Immediate device context has been destroyed");
+                        GLContextState& GLState = pDeviceContext->GetContextState();
+
+                        GLState.BindTexture(-1, GLViewTarget, pViewOGL->GetHandle());
+                        glTexParameteri(GLViewTarget, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_STENCIL_INDEX);
+                        DEV_CHECK_GL_ERROR("Failed to set GL_DEPTH_STENCIL_TEXTURE_MODE texture parameter");
+                        GLState.BindTexture(-1, GLViewTarget, GLObjectWrappers::GLTextureObj::Null());
+                    }
+                    else
+                    {
+                        // Throw an error if the format is not supported
+                        LOG_ERROR_AND_THROW("Format ", GetTextureFormatAttribs(ViewDesc.Format).Name, " is not supported");
+                    }
+                }
+
                 if (!IsIdentityComponentMapping(ViewDesc.Swizzle))
                 {
                     RefCntAutoPtr<DeviceContextGLImpl> pDeviceContext = pDeviceGLImpl->GetImmediateContext(0);
@@ -549,7 +569,7 @@ void TextureBaseGL::CreateViewInternal(const TextureViewDesc& OrigViewDesc, ITex
         {
             if (pViewOGL)
             {
-                pViewOGL->QueryInterface(IID_TextureView, reinterpret_cast<IObject**>(ppView));
+                pViewOGL->QueryInterface(IID_TextureView, ppView);
             }
         }
     }

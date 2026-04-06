@@ -33,7 +33,7 @@
 #include "EngineVkImplTraits.hpp"
 #include "TextureBase.hpp"
 #include "TextureViewVkImpl.hpp"
-#include "VulkanUtilities/VulkanMemoryManager.hpp"
+#include "VulkanUtilities/MemoryManager.hpp"
 
 namespace Diligent
 {
@@ -83,7 +83,7 @@ public:
 
     uint8_t* GetStagingDataCPUAddress() const
     {
-        auto* StagingDataCPUAddress = reinterpret_cast<uint8_t*>(m_MemoryAllocation.Page->GetCPUMemory());
+        uint8_t* StagingDataCPUAddress = reinterpret_cast<uint8_t*>(m_MemoryAllocation.Page->GetCPUMemory());
         VERIFY_EXPR(StagingDataCPUAddress != nullptr);
         StagingDataCPUAddress += m_StagingDataAlignedOffset;
         return StagingDataCPUAddress;
@@ -115,10 +115,10 @@ protected:
 
     void InitSparseProperties() noexcept(false);
 
-    VulkanUtilities::ImageWrapper           m_VulkanImage;
-    VulkanUtilities::BufferWrapper          m_StagingBuffer;
-    VulkanUtilities::VulkanMemoryAllocation m_MemoryAllocation;
-    VkDeviceSize                            m_StagingDataAlignedOffset = 0;
+    VulkanUtilities::ImageWrapper     m_VulkanImage;
+    VulkanUtilities::BufferWrapper    m_StagingBuffer;
+    VulkanUtilities::MemoryAllocation m_MemoryAllocation;
+    VkDeviceSize                      m_StagingDataAlignedOffset = 0;
 };
 
 } // namespace Diligent

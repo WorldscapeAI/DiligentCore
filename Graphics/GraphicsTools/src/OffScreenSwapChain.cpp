@@ -75,7 +75,7 @@ public:
 
     virtual void DILIGENT_CALL_TYPE Present(Uint32 SyncInterval) override
     {
-        auto pDeviceContext = m_wpDeviceContext.Lock();
+        RefCntAutoPtr<IDeviceContext> pDeviceContext = m_wpDeviceContext.Lock();
         if (!pDeviceContext)
         {
             LOG_ERROR_MESSAGE("Immediate context has been released");
@@ -192,7 +192,7 @@ void CreateOffScreenSwapChain(IRenderDevice* pDevice, IDeviceContext* pContext, 
     {
         RefCntAutoPtr<ISwapChain> pSwapChain{MakeNewRCObj<OffScreenSwapChain>()(pDevice, pContext, SCDesc)};
         if (pSwapChain)
-            pSwapChain->QueryInterface(IID_SwapChain, reinterpret_cast<IObject**>(ppSwapChain));
+            pSwapChain->QueryInterface(IID_SwapChain, ppSwapChain);
     }
     catch (...)
     {

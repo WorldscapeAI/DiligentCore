@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2023 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,9 +32,11 @@
 
 #include <stdlib.h>
 #include <atomic>
+#include <new>
 
 #include "../../Primitives/interface/Object.h"
 #include "../../Primitives/interface/MemoryAllocator.h"
+#include "../../Primitives/interface/AlignedMalloc.h"
 #include "../../Platforms/Basic/interface/DebugUtilities.hpp"
 #include "SpinLock.hpp"
 #include "Cast.hpp"
@@ -43,7 +45,8 @@ namespace Diligent
 {
 
 // This class controls the lifetime of a refcounted object
-class RefCountersImpl final : public IReferenceCounters
+// NB: RefCountersImpl can't be final, see https://github.com/DiligentGraphics/DiligentCore/issues/704.
+class RefCountersImpl : public IReferenceCounters
 {
 public:
     inline virtual ReferenceCounterValueType AddStrongRef() override final
@@ -60,7 +63,7 @@ public:
         VERIFY(m_ObjectWrapperBuffer[0] != 0 && m_ObjectWrapperBuffer[1] != 0, "Object wrapper is not initialized");
 
         // Decrement strong reference counter without acquiring the lock.
-        const auto RefCount = m_NumStrongReferences.fetch_add(-1) - 1;
+        const ReferenceCounterValueType RefCount = m_NumStrongReferences.fetch_add(-1) - 1;
         VERIFY(RefCount >= 0, "Inconsistent call to ReleaseStrongRef()");
         if (RefCount == 0)
         {
@@ -90,7 +93,7 @@ public:
         // while holding the lock. Otherwise reference counters object
         // may be destroyed twice if ReleaseStrongRef() is executed by other
         // thread.
-        const auto NumWeakReferences = m_NumWeakReferences.fetch_add(-1) - 1;
+        const ReferenceCounterValueType NumWeakReferences = m_NumWeakReferences.fetch_add(-1) - 1;
         VERIFY(NumWeakReferences >= 0, "Inconsistent call to ReleaseWeakRef()");
 
         // There are two special case when we must not destroy the ref counters object even
@@ -177,7 +180,7 @@ public:
         //
         Threading::SpinLockGuard Guard{m_Lock};
 
-        const auto StrongRefCnt = m_NumStrongReferences.fetch_add(+1) + 1;
+        const ReferenceCounterValueType StrongRefCnt = m_NumStrongReferences.fetch_add(+1) + 1;
 
         // Checking if m_ObjectState == ObjectState::Alive only is not reliable:
         //
@@ -199,7 +202,7 @@ public:
             // QueryInterface() must not lock the object, or a deadlock happens.
             // The only other two methods that lock the object are ReleaseStrongRef()
             // and ReleaseWeakRef(), which are never called by QueryInterface()
-            auto* pWrapper = reinterpret_cast<ObjectWrapperBase*>(m_ObjectWrapperBuffer);
+            ObjectWrapperBase* pWrapper = reinterpret_cast<ObjectWrapperBase*>(m_ObjectWrapperBuffer);
             pWrapper->QueryInterface(IID_Unknown, ppObject);
         }
         m_NumStrongReferences.fetch_add(-1);
@@ -243,7 +246,14 @@ private:
             if (m_pAllocator)
             {
                 m_pObject->~ObjectType();
-                m_pAllocator->Free(m_pObject);
+                if constexpr (alignof(ObjectType) > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+                {
+                    m_pAllocator->FreeAligned(m_pObject);
+                }
+                else
+                {
+                    m_pAllocator->Free(m_pObject);
+                }
             }
             else
             {
@@ -356,7 +366,7 @@ private:
 
 #ifdef DILIGENT_DEBUG
         {
-            auto NumStrongRefs = m_NumStrongReferences.load();
+            ReferenceCounterValueType NumStrongRefs = m_NumStrongReferences.load();
             VERIFY(NumStrongRefs == 0 || NumStrongRefs == 1, "Num strong references (", NumStrongRefs, ") is expected to be 0 or 1");
         }
 #endif
@@ -393,7 +403,7 @@ private:
             memcpy(ObjectWrapperBufferCopy, m_ObjectWrapperBuffer, sizeof(m_ObjectWrapperBuffer));
             memset(m_ObjectWrapperBuffer, 0, sizeof(m_ObjectWrapperBuffer));
 
-            auto* pWrapper = reinterpret_cast<ObjectWrapperBase*>(ObjectWrapperBufferCopy);
+            ObjectWrapperBase* pWrapper = reinterpret_cast<ObjectWrapperBase*>(ObjectWrapperBufferCopy);
 
             // In a multithreaded environment, reference counters object may
             // be destroyed at any time while m_pObject->~dtor() is running.
@@ -427,7 +437,7 @@ private:
             // 2. Read m_NumWeakReferences == 0    |
             // 3. Destroy the ref counters obj     |   2. Destroy the ref counters obj
             //
-            const auto bDestroyThis = m_NumWeakReferences.load() == 0;
+            const bool bDestroyThis = m_NumWeakReferences.load() == 0;
             // ReleaseWeakRef() decrements m_NumWeakReferences, and checks it for
             // zero only after acquiring the lock. So if m_NumWeakReferences==0, no
             // weak reference-related code may be running
@@ -448,12 +458,14 @@ private:
         }
     }
 
-    void SelfDestroy()
+    // Make the method virtual to ensure that the object is destroyed in the same module
+    // where it was created, see https://github.com/DiligentGraphics/DiligentCore/issues/704.
+    virtual void SelfDestroy()
     {
         delete this;
     }
 
-    ~RefCountersImpl()
+    virtual ~RefCountersImpl()
     {
         VERIFY(m_NumStrongReferences.load() == 0 && m_NumWeakReferences.load() == 0,
                "There exist outstanding references to the object being destroyed");
@@ -574,15 +586,26 @@ protected:
     // or from RefCountersImpl when object is destroyed
     // It needs to be protected (not private!) to allow generation of destructors in derived classes
 
-    void operator delete(void* ptr)
+    void operator delete(void* ptr) noexcept
     {
         free(ptr);
     }
 
+    void operator delete(void* ptr, std::align_val_t Alignment) noexcept
+    {
+        DILIGENT_ALIGNED_FREE(ptr);
+    }
+
     template <typename ObjectAllocatorType>
-    void operator delete(void* ptr, ObjectAllocatorType& Allocator, const Char* dbgDescription, const char* dbgFileName, const Int32 dbgLineNumber)
+    void operator delete(void* ptr, ObjectAllocatorType& Allocator, const Char* dbgDescription, const char* dbgFileName, Int32 dbgLineNumber) noexcept
     {
         return Allocator.Free(ptr);
+    }
+
+    template <typename ObjectAllocatorType>
+    void operator delete(void* ptr, std::align_val_t Alignment, ObjectAllocatorType& Allocator, const Char* dbgDescription, const char* dbgFileName, Int32 dbgLineNumber) noexcept
+    {
+        return Allocator.FreeAligned(ptr);
     }
 
 private:
@@ -593,12 +616,22 @@ private:
         return malloc(Size);
     }
 
+    void* operator new(size_t Size, std::align_val_t Alignment)
+    {
+        return DILIGENT_ALIGNED_MALLOC(Size, static_cast<size_t>(Alignment), __FILE__, __LINE__);
+    }
+
     template <typename ObjectAllocatorType>
-    void* operator new(size_t Size, ObjectAllocatorType& Allocator, const Char* dbgDescription, const char* dbgFileName, const Int32 dbgLineNumber)
+    void* operator new(size_t Size, ObjectAllocatorType& Allocator, const Char* dbgDescription, const char* dbgFileName, Int32 dbgLineNumber)
     {
         return Allocator.Allocate(Size, dbgDescription, dbgFileName, dbgLineNumber);
     }
 
+    template <typename ObjectAllocatorType>
+    void* operator new(size_t Size, std::align_val_t Alignment, ObjectAllocatorType& Allocator, const Char* dbgDescription, const char* dbgFileName, Int32 dbgLineNumber)
+    {
+        return Allocator.AllocateAligned(Size, static_cast<size_t>(Alignment), dbgDescription, dbgFileName, dbgLineNumber);
+    }
 
     // Note that the type of the reference counters is RefCountersImpl,
     // not IReferenceCounters. This avoids virtual calls from
@@ -668,9 +701,20 @@ public:
             // Operators new and delete of RefCountedObject are private and only accessible
             // by methods of MakeNewRCObj
             if (m_pAllocator)
-                pObj = new (*m_pAllocator, m_dvpDescription, m_dvpFileName, m_dvpLineNumber) ObjectType{pRefCounters, std::forward<CtorArgTypes>(CtorArgs)...};
+            {
+                if constexpr (alignof(ObjectType) > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+                {
+                    pObj = new (std::align_val_t{alignof(ObjectType)}, *m_pAllocator, m_dvpDescription, m_dvpFileName, m_dvpLineNumber) ObjectType{pRefCounters, std::forward<CtorArgTypes>(CtorArgs)...};
+                }
+                else
+                {
+                    pObj = new (*m_pAllocator, m_dvpDescription, m_dvpFileName, m_dvpLineNumber) ObjectType{pRefCounters, std::forward<CtorArgTypes>(CtorArgs)...};
+                }
+            }
             else
+            {
                 pObj = new ObjectType{pRefCounters, std::forward<CtorArgTypes>(CtorArgs)...};
+            }
             if (pNewRefCounters != nullptr)
                 pNewRefCounters->Attach<ObjectType, AllocatorType>(pObj, m_pAllocator);
         }

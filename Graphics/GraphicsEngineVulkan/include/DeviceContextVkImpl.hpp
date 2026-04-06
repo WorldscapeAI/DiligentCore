@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,9 +49,9 @@
 #include "ShaderResourceBindingVkImpl.hpp"
 
 #include "PipelineLayoutVk.hpp"
-#include "VulkanUtilities/VulkanCommandBufferPool.hpp"
-#include "VulkanUtilities/VulkanCommandBuffer.hpp"
-#include "VulkanUtilities/VulkanSyncObjectManager.hpp"
+#include "VulkanUtilities/CommandBufferPool.hpp"
+#include "VulkanUtilities/CommandBuffer.hpp"
+#include "VulkanUtilities/SyncObjectManager.hpp"
 #include "VulkanUtilities/RenderingInfoWrapper.hpp"
 #include "VulkanUploadHeap.hpp"
 #include "VulkanDynamicHeap.hpp"
@@ -378,7 +378,7 @@ public:
 
     size_t GetNumCommandsInCtx() const { return m_State.NumCommands; }
 
-    __forceinline VulkanUtilities::VulkanCommandBuffer& GetCommandBuffer()
+    __forceinline VulkanUtilities::CommandBuffer& GetCommandBuffer()
     {
         EnsureVkCmdBuffer();
         m_CommandBuffer.FlushBarriers();
@@ -496,8 +496,10 @@ private:
 
     void ChooseRenderPassAndFramebuffer();
 
+    __forceinline void CommitDynamicRenderPassIfClearsPending();
+
 private:
-    VulkanUtilities::VulkanCommandBuffer m_CommandBuffer;
+    VulkanUtilities::CommandBuffer m_CommandBuffer;
 
     struct ContextState
     {
@@ -536,7 +538,10 @@ private:
 
             // The total number of descriptors with dynamic offset, given by pSignature->GetDynamicOffsetCount().
             // Note that this is not the actual number of dynamic buffers in the resource cache.
-            Uint32 DynamicOffsetCount = 0;
+            Uint16 DynamicOffsetCount = 0;
+
+            // Index of the first dynamic offset in m_DynamicBufferOffsets
+            Uint16 FirstDynamicOffset = 0;
 
 #ifdef DILIGENT_DEVELOPMENT
             // The descriptor set base index that was used in the last BindDescriptorSets() call
@@ -555,6 +560,9 @@ private:
     __forceinline ResourceBindInfo& GetBindInfo(PIPELINE_TYPE Type);
 
     __forceinline void CommitDescriptorSets(ResourceBindInfo& BindInfo, Uint32 CommitSRBMask);
+
+    void CommitInlineConstants(ResourceBindInfo& BindInfo, Uint32 CommitSRBMask);
+
 #ifdef DILIGENT_DEVELOPMENT
     void DvpValidateCommittedShaderResources(ResourceBindInfo& BindInfo);
 #endif
@@ -582,9 +590,9 @@ private:
     FixedBlockMemoryAllocator m_CmdListAllocator;
 
     // Semaphores are not owned by the command context
-    std::vector<RefCntAutoPtr<ManagedSemaphore>>          m_WaitManagedSemaphores;
-    std::vector<RefCntAutoPtr<ManagedSemaphore>>          m_SignalManagedSemaphores;
-    std::vector<VulkanUtilities::VulkanRecycledSemaphore> m_WaitRecycledSemaphores;
+    std::vector<RefCntAutoPtr<ManagedSemaphore>>    m_WaitManagedSemaphores;
+    std::vector<RefCntAutoPtr<ManagedSemaphore>>    m_SignalManagedSemaphores;
+    std::vector<VulkanUtilities::RecycledSemaphore> m_WaitRecycledSemaphores;
 
     std::vector<VkSemaphore>          m_VkWaitSemaphores;
     std::vector<VkSemaphore>          m_VkSignalSemaphores;
@@ -636,9 +644,9 @@ private:
     std::vector<MappedBuffer> m_MappedBuffers;
 
     // Command pools for every queue family
-    std::unique_ptr<std::unique_ptr<VulkanUtilities::VulkanCommandBufferPool>[]> m_QueueFamilyCmdPools;
+    std::unique_ptr<std::unique_ptr<VulkanUtilities::CommandBufferPool>[]> m_QueueFamilyCmdPools;
     // Command pool for the family for which we are recording commands
-    VulkanUtilities::VulkanCommandBufferPool* m_CmdPool = nullptr;
+    VulkanUtilities::CommandBufferPool* m_CmdPool = nullptr;
 
     VulkanUploadHeap              m_UploadHeap;
     VulkanDynamicHeap             m_DynamicHeap;

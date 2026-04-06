@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,16 +56,16 @@
 namespace Diligent
 {
 
-RenderDeviceVkImpl::RenderDeviceVkImpl(IReferenceCounters*                                    pRefCounters,
-                                       IMemoryAllocator&                                      RawMemAllocator,
-                                       IEngineFactory*                                        pEngineFactory,
-                                       const EngineVkCreateInfo&                              EngineCI,
-                                       const GraphicsAdapterInfo&                             AdapterInfo,
-                                       size_t                                                 CommandQueueCount,
-                                       ICommandQueueVk**                                      CmdQueues,
-                                       std::shared_ptr<VulkanUtilities::VulkanInstance>       Instance,
-                                       std::unique_ptr<VulkanUtilities::VulkanPhysicalDevice> PhysicalDevice,
-                                       std::shared_ptr<VulkanUtilities::VulkanLogicalDevice>  LogicalDevice) :
+RenderDeviceVkImpl::RenderDeviceVkImpl(IReferenceCounters*                              pRefCounters,
+                                       IMemoryAllocator&                                RawMemAllocator,
+                                       IEngineFactory*                                  pEngineFactory,
+                                       const EngineVkCreateInfo&                        EngineCI,
+                                       const GraphicsAdapterInfo&                       AdapterInfo,
+                                       size_t                                           CommandQueueCount,
+                                       ICommandQueueVk**                                CmdQueues,
+                                       std::shared_ptr<VulkanUtilities::Instance>       Instance,
+                                       std::unique_ptr<VulkanUtilities::PhysicalDevice> PhysicalDevice,
+                                       std::shared_ptr<VulkanUtilities::LogicalDevice>  LogicalDevice) :
     // clang-format off
     TRenderDeviceBase
     {
@@ -82,9 +82,9 @@ RenderDeviceVkImpl::RenderDeviceVkImpl(IReferenceCounters*                      
         EngineCI.UploadHeapPageSize,
         EngineCI.DynamicHeapPageSize
     },
-    m_VulkanInstance         {Instance                 },
+    m_Instance         {Instance                 },
     m_PhysicalDevice         {std::move(PhysicalDevice)},
-    m_LogicalVkDevice        {std::move(LogicalDevice) },
+    m_LogicalDevice        {std::move(LogicalDevice) },
     m_DescriptorSetAllocator
     {
         *this,
@@ -132,7 +132,7 @@ RenderDeviceVkImpl::RenderDeviceVkImpl(IReferenceCounters*                      
     m_MemoryMgr
     {
         "Global resource memory manager",
-        *m_LogicalVkDevice,
+        *m_LogicalDevice,
         *m_PhysicalDevice,
         GetRawAllocator(),
         EngineCI.DeviceLocalMemoryPageSize,
@@ -150,7 +150,7 @@ RenderDeviceVkImpl::RenderDeviceVkImpl(IReferenceCounters*                      
     m_pDxCompiler{CreateDXCompiler(DXCompilerTarget::Vulkan, m_PhysicalDevice->GetVkVersion(), EngineCI.pDxCompilerPath)}
 // clang-format on
 {
-    if (!m_LogicalVkDevice->GetEnabledExtFeatures().DynamicRendering.dynamicRendering)
+    if (!m_LogicalDevice->GetEnabledExtFeatures().DynamicRendering.dynamicRendering)
     {
         m_FramebufferCache        = std::make_unique<FramebufferCache>(*this);
         m_ImplicitRenderPassCache = std::make_unique<RenderPassCache>(*this);
@@ -163,9 +163,9 @@ RenderDeviceVkImpl::RenderDeviceVkImpl(IReferenceCounters*                      
     m_DeviceInfo.APIVersion  = Version{VK_API_VERSION_MAJOR(vkVersion), VK_API_VERSION_MINOR(vkVersion)};
 
     m_DeviceInfo.Features = VkFeaturesToDeviceFeatures(vkVersion,
-                                                       m_LogicalVkDevice->GetEnabledFeatures(),
+                                                       m_LogicalDevice->GetEnabledFeatures(),
                                                        m_PhysicalDevice->GetProperties(),
-                                                       m_LogicalVkDevice->GetEnabledExtFeatures(),
+                                                       m_LogicalDevice->GetEnabledExtFeatures(),
                                                        m_PhysicalDevice->GetExtProperties());
 
     m_DeviceInfo.MaxShaderVersion.HLSL   = {5, 1};
@@ -242,15 +242,15 @@ RenderDeviceVkImpl::~RenderDeviceVkImpl()
     //{
     //    // If m_PhysicalDevice is empty, the device does not own vulkan logical device and must not
     //    // destroy it
-    //    vkDestroyDevice(m_VkDevice, m_VulkanInstance->GetVkAllocator());
+    //    vkDestroyDevice(m_VkDevice, m_Instance->GetVkAllocator());
     //}
 }
 
 
-void RenderDeviceVkImpl::AllocateTransientCmdPool(SoftwareQueueIndex                    CommandQueueId,
-                                                  VulkanUtilities::CommandPoolWrapper&  CmdPool,
-                                                  VulkanUtilities::VulkanCommandBuffer& CmdBuffer,
-                                                  const Char*                           DebugPoolName)
+void RenderDeviceVkImpl::AllocateTransientCmdPool(SoftwareQueueIndex                   CommandQueueId,
+                                                  VulkanUtilities::CommandPoolWrapper& CmdPool,
+                                                  VulkanUtilities::CommandBuffer&      CmdBuffer,
+                                                  const Char*                          DebugPoolName)
 {
     HardwareQueueIndex QueueFamilyIndex{GetCommandQueue(CommandQueueId).GetQueueFamilyIndex()};
     auto               CmdPoolMgrIter = m_TransientCmdPoolMgrs.find(QueueFamilyIndex);
@@ -267,7 +267,7 @@ void RenderDeviceVkImpl::AllocateTransientCmdPool(SoftwareQueueIndex            
     BuffAllocInfo.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     BuffAllocInfo.commandBufferCount = 1;
 
-    VkCommandBuffer vkCmdBuff = m_LogicalVkDevice->AllocateVkCommandBuffer(BuffAllocInfo);
+    VkCommandBuffer vkCmdBuff = m_LogicalDevice->AllocateVkCommandBuffer(BuffAllocInfo);
     DEV_CHECK_ERR(vkCmdBuff != VK_NULL_HANDLE, "Failed to allocate Vulkan command buffer");
 
 
@@ -284,8 +284,8 @@ void RenderDeviceVkImpl::AllocateTransientCmdPool(SoftwareQueueIndex            
     (void)err;
 
     CmdBuffer.SetVkCmdBuffer(vkCmdBuff,
-                             m_LogicalVkDevice->GetSupportedStagesMask(QueueFamilyIndex),
-                             m_LogicalVkDevice->GetSupportedAccessMask(QueueFamilyIndex));
+                             m_LogicalDevice->GetSupportedStagesMask(QueueFamilyIndex),
+                             m_LogicalDevice->GetSupportedAccessMask(QueueFamilyIndex));
 }
 
 
@@ -335,10 +335,10 @@ void RenderDeviceVkImpl::ExecuteAndDisposeTransientCmdBuff(SoftwareQueueIndex   
     class TransientCmdPoolRecycler
     {
     public:
-        TransientCmdPoolRecycler(const VulkanUtilities::VulkanLogicalDevice& _LogicalDevice,
-                                 CommandPoolManager&                         _CmdPoolMgr,
-                                 VulkanUtilities::CommandPoolWrapper&&       _Pool,
-                                 VkCommandBuffer&&                           _vkCmdBuffer) :
+        TransientCmdPoolRecycler(const VulkanUtilities::LogicalDevice& _LogicalDevice,
+                                 CommandPoolManager&                   _CmdPoolMgr,
+                                 VulkanUtilities::CommandPoolWrapper&& _Pool,
+                                 VkCommandBuffer&&                     _vkCmdBuffer) :
             // clang-format off
             LogicalDevice{_LogicalDevice         },
             CmdPoolMgr   {&_CmdPoolMgr           },
@@ -376,7 +376,7 @@ void RenderDeviceVkImpl::ExecuteAndDisposeTransientCmdBuff(SoftwareQueueIndex   
         }
 
     private:
-        const VulkanUtilities::VulkanLogicalDevice& LogicalDevice;
+        const VulkanUtilities::LogicalDevice& LogicalDevice;
 
         CommandPoolManager*                 CmdPoolMgr = nullptr;
         VulkanUtilities::CommandPoolWrapper Pool;
@@ -445,7 +445,7 @@ Uint64 RenderDeviceVkImpl::ExecuteCommandBuffer(SoftwareQueueIndex CommandQueueI
 void RenderDeviceVkImpl::IdleGPU()
 {
     IdleAllCommandQueues(true);
-    m_LogicalVkDevice->WaitIdle();
+    m_LogicalDevice->WaitIdle();
     ReleaseStaleResources();
 }
 
@@ -633,7 +633,7 @@ void RenderDeviceVkImpl::CreateTexture(const TextureDesc& TexDesc, VkImage vkImg
         [&]() //
         {
             TextureVkImpl* pTextureVk = NEW_RC_OBJ(m_TexObjAllocator, "TextureVkImpl instance", TextureVkImpl)(m_TexViewObjAllocator, this, TexDesc, InitialState, std::move(vkImgHandle));
-            pTextureVk->QueryInterface(IID_TextureVk, reinterpret_cast<IObject**>(ppTexture));
+            pTextureVk->QueryInterface(IID_TextureVk, ppTexture);
         } //
     );
 }
@@ -780,13 +780,16 @@ HardwareQueueIndex RenderDeviceVkImpl::GetQueueFamilyIndex(SoftwareQueueIndex Cm
     return HardwareQueueIndex{CmdQueue.GetQueueFamilyIndex()};
 }
 
-SparseTextureFormatInfo RenderDeviceVkImpl::GetSparseTextureFormatInfo(TEXTURE_FORMAT     TexFormat,
-                                                                       RESOURCE_DIMENSION Dimension,
-                                                                       Uint32             SampleCount) const
+Bool RenderDeviceVkImpl::GetSparseTextureFormatInfo(TEXTURE_FORMAT           TexFormat,
+                                                    RESOURCE_DIMENSION       Dimension,
+                                                    Uint32                   SampleCount,
+                                                    SparseTextureFormatInfo& Info) const
 {
+    Info = {};
+
     const COMPONENT_TYPE ComponentType = CheckSparseTextureFormatSupport(TexFormat, Dimension, SampleCount, m_AdapterInfo.SparseResources);
     if (ComponentType == COMPONENT_TYPE_UNDEFINED)
-        return {};
+        return false;
 
     const VkPhysicalDevice      vkDevice       = m_PhysicalDevice->GetVkDeviceHandle();
     const VkImageType           vkType         = Dimension == RESOURCE_DIM_TEX_3D ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
@@ -800,11 +803,10 @@ SparseTextureFormatInfo RenderDeviceVkImpl::GetSparseTextureFormatInfo(TEXTURE_F
 
     vkGetPhysicalDeviceSparseImageFormatProperties(vkDevice, vkFormat, vkType, vkSampleCount, vkDefaultUsage, VK_IMAGE_TILING_OPTIMAL, &FmtPropsCount, nullptr);
     if (FmtPropsCount != 1)
-        return {}; // Only single block per region is supported
+        return false; // Only single block per region is supported
 
     vkGetPhysicalDeviceSparseImageFormatProperties(vkDevice, vkFormat, vkType, vkSampleCount, vkDefaultUsage, VK_IMAGE_TILING_OPTIMAL, &FmtPropsCount, FmtProps);
 
-    SparseTextureFormatInfo Info;
     Info.BindFlags   = BIND_NONE;
     Info.TileSize[0] = FmtProps[0].imageGranularity.width;
     Info.TileSize[1] = FmtProps[0].imageGranularity.height;
@@ -829,12 +831,12 @@ SparseTextureFormatInfo RenderDeviceVkImpl::GetSparseTextureFormatInfo(TEXTURE_F
     if (CheckUsage(VK_IMAGE_USAGE_STORAGE_BIT))
         Info.BindFlags |= BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
 
-    return Info;
+    return true;
 }
 
 void RenderDeviceVkImpl::GetDeviceFeaturesVk(DeviceFeaturesVk& FeaturesVk) const
 {
-    FeaturesVk = PhysicalDeviceFeaturesToDeviceFeaturesVk(m_LogicalVkDevice->GetEnabledExtFeatures());
+    FeaturesVk = PhysicalDeviceFeaturesToDeviceFeaturesVk(m_LogicalDevice->GetEnabledExtFeatures());
 }
 
 } // namespace Diligent

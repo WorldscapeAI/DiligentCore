@@ -11,7 +11,7 @@ jobs:
             platform:        "Win32"
             toolset:         "x64"
             build_type:      "Debug"
-            cmake_args:      "-DDILIGENT_NO_GLSLANG=ON -DDILIGENT_NO_HLSL=ON"
+            cmake_args:      "-DDILIGENT_NO_GLSLANG=ON -DDILIGENT_NO_HLSL=ON -DDILIGENT_NO_DLSS=ON -DDILIGENT_NO_DSR=ON"
             cmake_generator: "Visual Studio 17 2022"
 
     runs-on: windows-2022
@@ -32,14 +32,14 @@ jobs:
 
     - name: Set up build environment
       if: success()
-      uses: DiligentGraphics/github-action/setup-build-env@v5
+      uses: DiligentGraphics/github-action/setup-build-env@v10
       with:
         platform:        ${{ matrix.platform }}
         cmake-generator: ${{ matrix.cmake_generator }}
 
     - name: Configure CMake
       if: success()
-      uses: DiligentGraphics/github-action/configure-cmake@v5
+      uses: DiligentGraphics/github-action/configure-cmake@v10
       with:
         generator:  ${{ matrix.cmake_generator }}
         vs-arch:    ${{ matrix.toolset }}
@@ -48,7 +48,7 @@ jobs:
 
     - name: Build
       if: success()
-      uses: DiligentGraphics/github-action/build@v5
+      uses: DiligentGraphics/github-action/build@v10
 
     - name: Run MSVC Code Analysis
       uses: microsoft/msvc-code-analysis-action@v0.1.1

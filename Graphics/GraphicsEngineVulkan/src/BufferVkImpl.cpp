@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,8 +34,8 @@
 #include "GraphicsAccessories.hpp"
 #include "EngineMemory.h"
 #include "StringTools.hpp"
-#include "VulkanUtilities/VulkanDebug.hpp"
-#include "VulkanUtilities/VulkanCommandBuffer.hpp"
+#include "VulkanUtilities/Debug.hpp"
+#include "VulkanUtilities/CommandBuffer.hpp"
 
 namespace Diligent
 {
@@ -55,9 +55,9 @@ BufferVkImpl::BufferVkImpl(IReferenceCounters*        pRefCounters,
 {
     ValidateBufferInitData(m_Desc, pBuffData);
 
-    const VulkanUtilities::VulkanLogicalDevice&  LogicalDevice  = pRenderDeviceVk->GetLogicalDevice();
-    const VulkanUtilities::VulkanPhysicalDevice& PhysicalDevice = pRenderDeviceVk->GetPhysicalDevice();
-    const VkPhysicalDeviceLimits&                DeviceLimits   = PhysicalDevice.GetProperties().limits;
+    const VulkanUtilities::LogicalDevice&  LogicalDevice  = pRenderDeviceVk->GetLogicalDevice();
+    const VulkanUtilities::PhysicalDevice& PhysicalDevice = pRenderDeviceVk->GetPhysicalDevice();
+    const VkPhysicalDeviceLimits&          DeviceLimits   = PhysicalDevice.GetProperties().limits;
 
     m_DynamicOffsetAlignment = std::max(Uint32{4}, static_cast<Uint32>(DeviceLimits.optimalBufferCopyOffsetAlignment));
 
@@ -231,7 +231,7 @@ BufferVkImpl::BufferVkImpl(IReferenceCounters*        pRefCounters,
 
         VkMemoryRequirements MemReqs = LogicalDevice.GetBufferMemoryRequirements(m_VulkanBuffer);
 
-        static constexpr uint32_t InvalidMemoryTypeIndex = VulkanUtilities::VulkanPhysicalDevice::InvalidMemoryTypeIndex;
+        static constexpr uint32_t InvalidMemoryTypeIndex = VulkanUtilities::PhysicalDevice::InvalidMemoryTypeIndex;
 
         uint32_t MemoryTypeIndex = InvalidMemoryTypeIndex;
         {
@@ -369,7 +369,7 @@ BufferVkImpl::BufferVkImpl(IReferenceCounters*        pRefCounters,
                 // VK_MEMORY_PROPERTY_HOST_COHERENT_BIT bit specifies that the host cache management commands vkFlushMappedMemoryRanges
                 // and vkInvalidateMappedMemoryRanges are NOT needed to flush host writes to the device or make device writes visible
                 // to the host (10.2)
-                VulkanUtilities::VulkanMemoryAllocation StagingMemoryAllocation = pRenderDeviceVk->AllocateMemory(StagingBufferMemReqs, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                VulkanUtilities::MemoryAllocation StagingMemoryAllocation = pRenderDeviceVk->AllocateMemory(StagingBufferMemReqs, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
                 if (!StagingMemoryAllocation)
                     LOG_ERROR_AND_THROW("Failed to allocate staging memory for buffer '", m_Desc.Name, "'.");
 
@@ -389,8 +389,8 @@ BufferVkImpl::BufferVkImpl(IReferenceCounters*        pRefCounters,
                     ClassPtrCast<DeviceContextVkImpl>(pBuffData->pContext)->GetCommandQueueId() :
                     SoftwareQueueIndex{PlatformMisc::GetLSB(m_Desc.ImmediateContextMask)};
 
-                VulkanUtilities::CommandPoolWrapper  CmdPool;
-                VulkanUtilities::VulkanCommandBuffer CmdBuffer;
+                VulkanUtilities::CommandPoolWrapper CmdPool;
+                VulkanUtilities::CommandBuffer      CmdBuffer;
                 pRenderDeviceVk->AllocateTransientCmdPool(CmdQueueInd, CmdPool, CmdBuffer, "Transient command pool to copy staging data to a device buffer");
 
                 CmdBuffer.MemoryBarrier(VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -443,6 +443,9 @@ BufferVkImpl::BufferVkImpl(IReferenceCounters*        pRefCounters,
     }
 
     VERIFY_EXPR(IsInKnownState());
+
+    if (m_Desc.Usage == USAGE_SPARSE)
+        InitSparseProperties();
 }
 
 
@@ -462,6 +465,9 @@ BufferVkImpl::BufferVkImpl(IReferenceCounters*        pRefCounters,
     m_VulkanBuffer{vkBuffer}
 {
     SetState(InitialState);
+
+    if (m_Desc.Usage == USAGE_SPARSE)
+        InitSparseProperties();
 }
 
 BufferVkImpl::~BufferVkImpl()
@@ -520,7 +526,7 @@ VulkanUtilities::BufferViewWrapper BufferVkImpl::CreateView(struct BufferViewDes
         ViewCI.offset = ViewDesc.ByteOffset; // offset in bytes from the base address of the buffer
         ViewCI.range  = ViewDesc.ByteWidth;  // size in bytes of the buffer view
 
-        const VulkanUtilities::VulkanLogicalDevice& LogicalDevice{GetDevice()->GetLogicalDevice()};
+        const VulkanUtilities::LogicalDevice& LogicalDevice{GetDevice()->GetLogicalDevice()};
         BuffView = LogicalDevice.CreateBufferView(ViewCI, ViewDesc.Name);
     }
     else if (m_Desc.Mode == BUFFER_MODE_STRUCTURED ||
@@ -583,8 +589,8 @@ void BufferVkImpl::FlushMappedRange(Uint64 StartOffset, Uint64 Size)
 {
     DvpVerifyFlushMappedRangeArguments(StartOffset, Size);
 
-    const VulkanUtilities::VulkanLogicalDevice& LogicalDevice = GetDevice()->GetLogicalDevice();
-    const VkPhysicalDeviceLimits&               DeviceLimits  = GetDevice()->GetPhysicalDevice().GetProperties().limits;
+    const VulkanUtilities::LogicalDevice& LogicalDevice = GetDevice()->GetLogicalDevice();
+    const VkPhysicalDeviceLimits&         DeviceLimits  = GetDevice()->GetPhysicalDevice().GetProperties().limits;
 
     VkMappedMemoryRange MappedRange{};
     MappedRange.sType  = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
@@ -598,8 +604,8 @@ void BufferVkImpl::InvalidateMappedRange(Uint64 StartOffset, Uint64 Size)
 {
     DvpVerifyInvalidateMappedRangeArguments(StartOffset, Size);
 
-    const VulkanUtilities::VulkanLogicalDevice& LogicalDevice = GetDevice()->GetLogicalDevice();
-    const VkPhysicalDeviceLimits&               DeviceLimits  = GetDevice()->GetPhysicalDevice().GetProperties().limits;
+    const VulkanUtilities::LogicalDevice& LogicalDevice = GetDevice()->GetLogicalDevice();
+    const VkPhysicalDeviceLimits&         DeviceLimits  = GetDevice()->GetPhysicalDevice().GetProperties().limits;
 
     VkMappedMemoryRange MappedRange{};
     MappedRange.sType  = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
@@ -609,17 +615,13 @@ void BufferVkImpl::InvalidateMappedRange(Uint64 StartOffset, Uint64 Size)
     LogicalDevice.InvalidateMappedMemoryRanges(1, &MappedRange);
 }
 
-SparseBufferProperties BufferVkImpl::GetSparseProperties() const
+void BufferVkImpl::InitSparseProperties()
 {
-    DEV_CHECK_ERR(m_Desc.Usage == USAGE_SPARSE,
-                  "IBuffer::GetSparseProperties() must be used for sparse buffer");
-
+    VERIFY_EXPR(m_Desc.Usage == USAGE_SPARSE);
     VkMemoryRequirements MemReq = m_pDevice->GetLogicalDevice().GetBufferMemoryRequirements(GetVkBuffer());
 
-    SparseBufferProperties Props{};
-    Props.AddressSpaceSize = MemReq.size;
-    Props.BlockSize        = StaticCast<Uint32>(MemReq.alignment);
-    return Props;
+    m_SparseProps.AddressSpaceSize = MemReq.size;
+    m_SparseProps.BlockSize        = StaticCast<Uint32>(MemReq.alignment);
 }
 
 } // namespace Diligent

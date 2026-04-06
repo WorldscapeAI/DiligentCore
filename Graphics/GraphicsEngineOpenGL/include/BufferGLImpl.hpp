@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,7 +64,7 @@ public:
     ~BufferGLImpl();
 
     /// Queries the specific interface, see IObject::QueryInterface() for details
-    virtual void DILIGENT_CALL_TYPE QueryInterface(const INTERFACE_ID& IID, IObject** ppInterface) override;
+    IMPLEMENT_QUERY_INTERFACE_IN_PLACE(IID_BufferGL, TBufferBase)
 
     void UpdateData(GLContextState& CtxState, Uint64 Offset, Uint64 Size, const void* pData);
     void CopyData(GLContextState& CtxState, BufferGLImpl& SrcBufferGL, Uint64 SrcOffset, Uint64 DstOffset, Uint64 Size);
@@ -81,9 +81,6 @@ public:
 
     /// Implementation of IBuffer::GetNativeHandle() in OpenGL backend.
     virtual Uint64 DILIGENT_CALL_TYPE GetNativeHandle() override final { return BitCast<Uint64>(GetGLBufferHandle()); }
-
-    /// Implementation of IBuffer::GetSparseProperties().
-    virtual SparseBufferProperties DILIGENT_CALL_TYPE GetSparseProperties() const override final;
 
 private:
     virtual void CreateViewInternal(const struct BufferViewDesc& ViewDesc, IBufferView** ppView, bool bIsDefaultView) override;
@@ -110,7 +107,7 @@ void BufferGLImpl::BufferMemoryBarrier(MEMORY_BARRIER RequiredBarriers, GLContex
 #if GL_ARB_shader_image_load_store
 #    ifdef DILIGENT_DEBUG
     {
-        constexpr auto BufferBarriers = MEMORY_BARRIER_ALL_BUFFER_BARRIERS;
+        constexpr MEMORY_BARRIER BufferBarriers = MEMORY_BARRIER_ALL_BUFFER_BARRIERS;
         VERIFY((RequiredBarriers & BufferBarriers) != 0, "At least one buffer memory barrier flag should be set");
         VERIFY((RequiredBarriers & ~BufferBarriers) == 0, "Inappropriate buffer memory barrier flag");
     }

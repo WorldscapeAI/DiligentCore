@@ -2,6 +2,8 @@ cmake_minimum_required (VERSION 3.19)
 
 project(DiligentCore)
 
+set(DILIGENT_CORE_FOUND TRUE CACHE INTERNAL "DiligentCore module is found")
+
 # Define GNU standard installation directories such as CMAKE_INSTALL_INCLUDEDIR, CMAKE_INSTALL_LIBDIR, etc.
 include(GNUInstallDirs)
 
@@ -57,6 +59,7 @@ set(VULKAN_SUPPORTED           FALSE CACHE INTERNAL "Vulkan is not supported")
 set(METAL_SUPPORTED            FALSE CACHE INTERNAL "Metal is not supported")
 set(WEBGPU_SUPPORTED           FALSE CACHE INTERNAL "WebGPU is not supported")
 set(ARCHIVER_SUPPORTED         FALSE CACHE INTERNAL "Archiver is not supported")
+set(SUPER_RESOLUTION_SUPPORTED TRUE  CACHE INTERNAL "Super resolution is supported")
 
 set(DILIGENT_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "DiligentCore module source directory")
 
@@ -101,24 +104,15 @@ endif()
 message("CMake generator: " ${CMAKE_GENERATOR})
 
 if(WIN32)
-    if (CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
-        set(WINDOWS_SDK_VERSION ${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION} CACHE INTERNAL "Windows SDK version")
-    elseif(DEFINED ENV{WindowsSDKVersion})
-        set(WINDOWS_SDK_VERSION $ENV{WindowsSDKVersion})
-        # For unbeknown reason, the value ends with a backslash, so we need to remove it
-        string(REPLACE "\\" "" WINDOWS_SDK_VERSION ${WINDOWS_SDK_VERSION})
-        set(WINDOWS_SDK_VERSION ${WINDOWS_SDK_VERSION} CACHE INTERNAL "Windows SDK version")
-    else()
-        set(WINDOWS_SDK_VERSION "0.0" CACHE INTERNAL "Windows SDK version")
-        message(WARNING "Unable to determine Windows SDK version: neither the CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION CMake variable nor the WindowsSDKVersion environment variable is set")
-    endif()
+    include(BuildTools/CMake/FindWindowsSDK.cmake)
+    find_windows_sdk()
 
     if(${CMAKE_SYSTEM_NAME} STREQUAL "WindowsStore")
         set(PLATFORM_UNIVERSAL_WINDOWS TRUE CACHE INTERNAL "Target platform: Windows Store")
-        message("Target platform: Universal Windows " ${ARCH} ". Windows SDK Version: " ${WINDOWS_SDK_VERSION})
+        message("Target platform: Universal Windows " ${ARCH})
     else()
         set(PLATFORM_WIN32 TRUE CACHE INTERNAL "Target platform: Win32") #WIN32 is a variable, so we cannot use string "WIN32"
-        message("Target platform: Win32 " ${ARCH} ". Windows SDK Version: " ${WINDOWS_SDK_VERSION})
+        message("Target platform: Win32 " ${ARCH})
     endif()
 else()
     if(${CMAKE_SYSTEM_NAME} STREQUAL "Android")
@@ -143,7 +137,7 @@ else()
         message("Target platform: tvOS " ${ARCH})
     elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
         set(PLATFORM_WEB TRUE CACHE INTERNAL "Target platform: Web")
-        set(PLATFORM_EMSCRIPTEN TRUE CACHE INTERNAL "Build with Emscritpen")
+        set(PLATFORM_EMSCRIPTEN TRUE CACHE INTERNAL "Build with Emscripten")
         message("Target platform: Web " ${ARCH})
     else()
         message(FATAL_ERROR "Unsupported platform")
@@ -178,8 +172,11 @@ if(PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS)
     endif()
 endif()
 
-if(${CMAKE_GENERATOR} MATCHES "MinGW")
+if(MINGW)
     message("Building with MinGW")
+    if(MSYS)
+        message("  in MSYS environment")
+    endif()
     set(MINGW_BUILD TRUE CACHE INTERNAL "Building with MinGW")
 endif()
 
@@ -208,7 +205,7 @@ elseif(PLATFORM_MACOS)
     set(ARCHIVER_SUPPORTED TRUE CACHE INTERNAL "Archiver is supported on MacOS platform")
     target_compile_definitions(Diligent-PublicBuildSettings INTERFACE PLATFORM_MACOS=1 PLATFORM_APPLE=1)
 elseif(PLATFORM_IOS)
-    set(GLES_SUPPORTED TRUE CACHE INTERNAL "OpenGLES is supported on iOS platform")
+    set(GLES_SUPPORTED     TRUE CACHE INTERNAL "OpenGLES is supported on iOS platform")
     target_compile_definitions(Diligent-PublicBuildSettings INTERFACE PLATFORM_IOS=1 PLATFORM_APPLE=1)
 elseif(PLATFORM_TVOS)
     target_compile_definitions(Diligent-PublicBuildSettings INTERFACE PLATFORM_TVOS=1 PLATFORM_APPLE=1)
@@ -307,6 +304,7 @@ else()
     option(DILIGENT_NO_WEBGPU        "Disable WebGPU backend" ON)
 endif()
 option(DILIGENT_NO_ARCHIVER          "Do not build archiver" OFF)
+option(DILIGENT_NO_SUPER_RESOLUTION  "Do not build super resolution" OFF)
 
 option(DILIGENT_EMSCRIPTEN_STRIP_DEBUG_INFO "Strip debug information from WebAsm binaries" OFF)
 
@@ -332,6 +330,9 @@ if(${DILIGENT_NO_WEBGPU})
 endif()
 if(${DILIGENT_NO_ARCHIVER})
     set(ARCHIVER_SUPPORTED FALSE CACHE INTERNAL "Archiver is forcibly disabled")
+endif()
+if(${DILIGENT_NO_SUPER_RESOLUTION})
+    set(SUPER_RESOLUTION_SUPPORTED FALSE CACHE INTERNAL "Super resolution is forcibly disabled")
 endif()
 
 if(NOT (${D3D11_SUPPORTED} OR ${D3D12_SUPPORTED} OR ${GL_SUPPORTED} OR ${GLES_SUPPORTED} OR ${VULKAN_SUPPORTED} OR ${METAL_SUPPORTED} OR ${WEBGPU_SUPPORTED}))
@@ -454,22 +455,6 @@ else()
 endif(MSVC)
 
 
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR
-    CMAKE_CXX_COMPILER_ID MATCHES "GNU")
-    if(PLATFORM_APPLE)
-        # Looks like force_load is preferable over all_load
-        set(WHOLE_ARCHIVE_FLAG "-Wl,-force_load" CACHE INTERNAL "all_load flag")
-        # Option -noall_load is obsolete and there is no -noforce_load
-        set(NO_WHOLE_ARCHIVE_FLAG "" CACHE INTERNAL "noall_load flag")
-    else()
-        set(WHOLE_ARCHIVE_FLAG "-Wl,--whole-archive" CACHE INTERNAL "whole-archive flag")
-        set(NO_WHOLE_ARCHIVE_FLAG "-Wl,--no-whole-archive" CACHE INTERNAL "no-whole-archive flag")
-    endif()
-else()
-    set(WHOLE_ARCHIVE_FLAG "")
-    set(NO_WHOLE_ARCHIVE_FLAG "")
-endif()
-
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # Treat warnings as errors
     set(DILIGENT_CLANG_COMPILE_OPTIONS "" CACHE STRING "Common Clang compile options")
@@ -509,7 +494,6 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         INTERFACE
             -Wno-microsoft-exception-spec
             -Wno-tautological-constant-out-of-range-compare
-            -Wno-enum-constexpr-conversion
         )
     elseif (PLATFORM_APPLE)
         # Allow unavailable API warnings not being errors as they tend to randomly

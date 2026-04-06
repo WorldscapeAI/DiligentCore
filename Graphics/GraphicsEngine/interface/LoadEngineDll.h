@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2022 Diligent Graphics LLC
+ *  Copyright 2019-2025 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,9 +39,8 @@
 #    include "../../../Common/interface/StringTools.hpp"
 #endif
 
-#ifndef NOMINMAX
-#    define NOMINMAX
-#endif
+// NB: do not use WinHPreface/WinHPostface as this is a public header
+//     and messing with Windows macros may break client code.
 #include <Windows.h>
 
 DILIGENT_BEGIN_NAMESPACE(Diligent)

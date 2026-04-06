@@ -182,6 +182,9 @@ void DeviceContextWebGPUImpl::CommitShaderResources(IShaderResourceBinding*     
 
 #ifdef DILIGENT_DEBUG
     ResourceCache.DbgVerifyDynamicBuffersCounter();
+    VERIFY(!ResourceCache.HasInlineConstants() || ResourceCache.HasDynamicResources(),
+           "Inline constant buffers count towards the number of dynamic resources, "
+           "so a resource cache with inline constants must also have dynamic resources.");
 #endif
 
     const WGPUDevice wgpuDevice = m_pDevice->GetWebGPUDevice();
@@ -189,6 +192,8 @@ void DeviceContextWebGPUImpl::CommitShaderResources(IShaderResourceBinding*     
     const Uint32                         SRBIndex   = pResBindingWebGPU->GetBindingIndex();
     PipelineResourceSignatureWebGPUImpl* pSignature = pResBindingWebGPU->GetSignature();
     m_BindInfo.Set(SRBIndex, pResBindingWebGPU);
+    VERIFY((m_BindInfo.DynamicSRBMask & m_BindInfo.InlineConstantsSRBMask) == m_BindInfo.InlineConstantsSRBMask,
+           "SRBs with inline constants must also be marked as dynamic.");
 
     Uint32 BGIndex = 0;
     for (PipelineResourceSignatureWebGPUImpl::BIND_GROUP_ID BindGroupId : {PipelineResourceSignatureWebGPUImpl::BIND_GROUP_ID_STATIC_MUTABLE,
@@ -218,7 +223,7 @@ void SetBindGroup(WGPUComputePassEncoder Encoder, uint32_t GroupIndex, WGPUBindG
 }
 
 template <typename CmdEncoderType>
-void DeviceContextWebGPUImpl::CommitBindGroups(CmdEncoderType CmdEncoder, Uint32 CommitSRBMask)
+void DeviceContextWebGPUImpl::CommitBindGroups(CmdEncoderType CmdEncoder, Uint32 CommitSRBMask, bool InlineConstantsIntact)
 {
     VERIFY(CommitSRBMask != 0, "This method should not be called when there is nothing to commit");
 
@@ -232,6 +237,26 @@ void DeviceContextWebGPUImpl::CommitBindGroups(CmdEncoderType CmdEncoder, Uint32
         if ((CommitSRBMask & SRBBit) == 0)
             continue;
 
+        const ShaderResourceCacheWebGPU* ResourceCache = m_BindInfo.ResourceCaches[sign];
+        VERIFY_EXPR(ResourceCache != nullptr);
+
+        const bool SRBStale = (m_BindInfo.StaleSRBMask & SRBBit) != 0;
+
+        // Update inline constant buffers if needed
+        if ((m_BindInfo.InlineConstantsSRBMask & SRBBit) != 0)
+        {
+            VERIFY(ResourceCache->HasInlineConstants(),
+                   "Shader resource cache does not contain inline constants, but the corresponding bit in InlineConstantsSRBMask is set.");
+            // Update inline constant buffers if the SRB is stale or inline constants have changed
+            if (SRBStale || !InlineConstantsIntact)
+            {
+                if (PipelineResourceSignatureWebGPUImpl* pSign = m_pPipelineState->GetResourceSignature(sign))
+                {
+                    pSign->UpdateInlineConstantBuffers(*ResourceCache, this);
+                }
+            }
+        }
+
         Uint32 BindGroupCacheIndex = 0;
         for (PipelineResourceSignatureWebGPUImpl::BIND_GROUP_ID BindGroupId : {PipelineResourceSignatureWebGPUImpl::BIND_GROUP_ID_STATIC_MUTABLE,
                                                                                PipelineResourceSignatureWebGPUImpl::BIND_GROUP_ID_DYNAMIC})
@@ -240,8 +265,6 @@ void DeviceContextWebGPUImpl::CommitBindGroups(CmdEncoderType CmdEncoder, Uint32
             if (!BindGroup.IsActive())
                 continue;
 
-            const ShaderResourceCacheWebGPU* ResourceCache = m_BindInfo.ResourceCaches[sign];
-            VERIFY_EXPR(ResourceCache != nullptr);
             bool DynamicOffsetsChanged = false;
             if (!BindGroup.DynamicBufferOffsets.empty())
             {
@@ -249,7 +272,7 @@ void DeviceContextWebGPUImpl::CommitBindGroups(CmdEncoderType CmdEncoder, Uint32
             }
             ++BindGroupCacheIndex;
 
-            if ((m_BindInfo.StaleSRBMask & SRBBit) == 0 && !DynamicOffsetsChanged)
+            if (!SRBStale && !DynamicOffsetsChanged)
             {
                 continue;
             }
@@ -347,7 +370,7 @@ void DeviceContextWebGPUImpl::SetRenderTargetsExt(const SetRenderTargetsAttribs&
 
     if (TDeviceContextBase::SetRenderTargets(Attribs) || (Attribs.NumRenderTargets == 0 && Attribs.pDepthStencil == nullptr))
     {
-        EndCommandEncoders(COMMAND_ENCODER_FLAG_RENDER);
+        EndCommandEncoders();
         SetViewports(1, nullptr, 0, 0);
     }
 }
@@ -1616,14 +1639,14 @@ void DeviceContextWebGPUImpl::EndDebugGroup()
         if (DebugGroupType == DEBUG_GROUP_TYPE_RENDER)
             wgpuRenderPassEncoderPopDebugGroup(GetRenderPassCommandEncoder());
         else
-            m_PendingDebugGroups.push_back(DebugGroupType);
+            m_EndedDebugGroups.push_back(DebugGroupType);
     }
     else if (m_wgpuComputePassEncoder)
     {
         if (DebugGroupType == DEBUG_GROUP_TYPE_COMPUTE)
             wgpuComputePassEncoderPopDebugGroup(GetComputePassCommandEncoder());
         else
-            m_PendingDebugGroups.push_back(DebugGroupType);
+            m_EndedDebugGroups.push_back(DebugGroupType);
     }
     else
     {
@@ -1811,11 +1834,11 @@ void DeviceContextWebGPUImpl::EndCommandEncoders(Uint32 EncoderFlags)
         }
     }
 
-    while (!m_PendingDebugGroups.empty())
+    while (!m_EndedDebugGroups.empty())
     {
-        if (m_PendingDebugGroups.back() != DEBUG_GROUP_TYPE_NULL)
+        if (m_EndedDebugGroups.back() != DEBUG_GROUP_TYPE_NULL)
             wgpuCommandEncoderPopDebugGroup(m_wgpuCommandEncoder);
-        m_PendingDebugGroups.pop_back();
+        m_EndedDebugGroups.pop_back();
     }
 }
 
@@ -1828,7 +1851,7 @@ void DeviceContextWebGPUImpl::CommitRenderTargets()
     WGPURenderPassDepthStencilAttachment wgpuRenderPassDepthStencilAttachment{};
     for (Uint32 RTIndex = 0; RTIndex < m_NumBoundRenderTargets; ++RTIndex)
     {
-        if (auto* pRTV = m_pBoundRenderTargets[RTIndex].RawPtr())
+        if (TextureViewWebGPUImpl* pRTV = m_pBoundRenderTargets[RTIndex])
         {
             const auto& ClearColor = m_PendingClears.Colors[RTIndex];
 
@@ -2097,8 +2120,10 @@ WGPURenderPassEncoder DeviceContextWebGPUImpl::PrepareForDraw(DRAW_FLAGS Flags)
         m_EncoderState.SetUpToDate(WebGPUEncoderState::CMD_ENCODER_STATE_STENCIL_REF);
     }
 
-    if (CommittedShaderResources::SRBMaskType CommitSRBMask = m_BindInfo.GetCommitMask(Flags & DRAW_FLAG_DYNAMIC_RESOURCE_BUFFERS_INTACT))
-        CommitBindGroups(wgpuRenderCmdEncoder, CommitSRBMask);
+    const bool DynamicBuffersIntact  = (Flags & DRAW_FLAG_DYNAMIC_RESOURCE_BUFFERS_INTACT) != 0;
+    const bool InlineConstantsIntact = (Flags & DRAW_FLAG_INLINE_CONSTANTS_INTACT) != 0;
+    if (CommittedShaderResources::SRBMaskType CommitSRBMask = m_BindInfo.GetCommitMask(DynamicBuffersIntact, InlineConstantsIntact))
+        CommitBindGroups(wgpuRenderCmdEncoder, CommitSRBMask, InlineConstantsIntact);
 
     return wgpuRenderCmdEncoder;
 }

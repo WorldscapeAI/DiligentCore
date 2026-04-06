@@ -1,5 +1,7 @@
 cmake_minimum_required (VERSION 3.10)
 
+include(../../BuildTools/CMake/BuildUtils.cmake)
+
 project(Diligent-GraphicsEngineOpenGL CXX)
 
 set(INCLUDE
@@ -171,7 +173,8 @@ add_library(Diligent-GraphicsEngineOpenGL-static STATIC
 add_library(Diligent-GraphicsEngineOpenGL-shared SHARED
     readme.md
 )
-if(MSVC)
+
+if((PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS) AND NOT MINGW_BUILD)
     target_sources(Diligent-GraphicsEngineOpenGL-shared PRIVATE ${DLL_SOURCE})
 endif()
 
@@ -262,12 +265,12 @@ PUBLIC
 target_link_libraries(Diligent-GraphicsEngineOpenGL-shared
 PRIVATE
     Diligent-BuildSettings
-    ${WHOLE_ARCHIVE_FLAG} Diligent-GraphicsEngineOpenGL-static ${NO_WHOLE_ARCHIVE_FLAG}
 PUBLIC
     ${PUBLIC_DEPENDENCIES}
 )
+target_link_whole_archive(Diligent-GraphicsEngineOpenGL-shared Diligent-GraphicsEngineOpenGL-static)
 
-target_compile_definitions(Diligent-GraphicsEngineOpenGL-shared PUBLIC ENGINE_DLL=1)
+target_compile_definitions(Diligent-GraphicsEngineOpenGL-shared PUBLIC DILIGENT_OPENGL_SHARED=1)
 if(PLATFORM_MACOS)
     # Silence OpenGL deprecation warnings
     target_compile_definitions(Diligent-GraphicsEngineOpenGL-static PUBLIC GL_SILENCE_DEPRECATION)

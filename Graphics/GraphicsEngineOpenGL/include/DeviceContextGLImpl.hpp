@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,7 +58,7 @@ public:
                         const DeviceContextDesc& Desc);
 
     /// Queries the specific interface, see IObject::QueryInterface() for details.
-    virtual void DILIGENT_CALL_TYPE QueryInterface(const INTERFACE_ID& IID, IObject** ppInterface) override final;
+    IMPLEMENT_QUERY_INTERFACE_IN_PLACE(IID_DeviceContextGL, TDeviceContextBase)
 
     /// Implementation of IDeviceContext::Begin() in OpenGL backend.
     virtual void DILIGENT_CALL_TYPE Begin(Uint32 ImmediateContextId) override final;
@@ -316,6 +316,8 @@ protected:
     GLContextState m_ContextState;
 
 private:
+    void CommitDefaultFramebuffer();
+
     __forceinline void PrepareForDraw(DRAW_FLAGS Flags, bool IsIndexed, GLenum& GlTopology);
     __forceinline void PrepareForIndexedDraw(VALUE_TYPE IndexType, Uint32 FirstIndexLocation, GLenum& GLIndexType, size_t& FirstIndexByteOffset);
     __forceinline void PrepareForIndirectDraw(IBuffer* pAttribsBuffer);
@@ -323,7 +325,7 @@ private:
     __forceinline void PostDraw();
 
     using TBindings = PipelineResourceSignatureGLImpl::TBindings;
-    void BindProgramResources(Uint32 BindSRBMask);
+    void BindProgramResources(Uint32 BindSRBMask, bool DynamicBuffersIntact = false, bool InlineConstantsIntact = false);
 
 #ifdef DILIGENT_DEVELOPMENT
     void DvpValidateCommittedShaderResources();

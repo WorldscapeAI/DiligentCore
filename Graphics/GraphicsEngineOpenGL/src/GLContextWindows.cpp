@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2025 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -70,7 +70,7 @@ GLContext::GLContext(const EngineGLCreateInfo& InitAttribs,
         pfd.iPixelType = PFD_TYPE_RGBA;
         if (pSCDesc != nullptr)
         {
-            auto ColorFmt = pSCDesc->ColorBufferFormat;
+            TEXTURE_FORMAT ColorFmt = pSCDesc->ColorBufferFormat;
             if (ColorFmt == TEX_FORMAT_RGBA8_UNORM || ColorFmt == TEX_FORMAT_RGBA8_UNORM_SRGB ||
                 ColorFmt == TEX_FORMAT_BGRA8_UNORM || ColorFmt == TEX_FORMAT_BGRA8_UNORM_SRGB)
             {
@@ -83,7 +83,7 @@ GLContext::GLContext(const EngineGLCreateInfo& InitAttribs,
                 pfd.cColorBits = 32;
             }
 
-            auto DepthFmt = pSCDesc->DepthBufferFormat;
+            TEXTURE_FORMAT DepthFmt = pSCDesc->DepthBufferFormat;
             switch (DepthFmt)
             {
                 case TEX_FORMAT_UNKNOWN:
@@ -127,6 +127,9 @@ GLContext::GLContext(const EngineGLCreateInfo& InitAttribs,
         if (nPixelFormat == 0)
             LOG_ERROR_AND_THROW("Invalid Pixel Format");
 
+        // NB: An application can only set the pixel format of a window one time.
+        //     Once a window's pixel format is set, it cannot be changed.
+        //     https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setpixelformat
         BOOL bResult = SetPixelFormat(m_WindowHandleToDeviceContext, nPixelFormat, &pfd);
         if (!bResult)
             LOG_ERROR_AND_THROW("Failed to set Pixel Format");
@@ -146,23 +149,25 @@ GLContext::GLContext(const EngineGLCreateInfo& InitAttribs,
             std::pair<int, int> gl_versions[] = {{4, 4}, {4, 3}, {4, 2}};
             for (size_t i = 0; i < _countof(gl_versions) && m_Context == NULL; ++i)
             {
+                // Setup attributes for a new OpenGL rendering context
                 const auto& version = gl_versions[i];
                 MajorVersion        = version.first;
                 MinorVersion        = version.second;
-                // Setup attributes for a new OpenGL rendering context
+
+                int ContextFlags = WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB;
+                if (InitAttribs.EnableValidation)
+                {
+                    ContextFlags |= WGL_CONTEXT_DEBUG_BIT_ARB;
+                }
+
                 int attribs[] =
                     {
                         WGL_CONTEXT_MAJOR_VERSION_ARB, MajorVersion,
                         WGL_CONTEXT_MINOR_VERSION_ARB, MinorVersion,
-                        WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
+                        WGL_CONTEXT_FLAGS_ARB, ContextFlags,
                         GL_CONTEXT_PROFILE_MASK, GL_CONTEXT_CORE_PROFILE_BIT,
                         0, 0 //
                     };
-
-                if (InitAttribs.EnableValidation)
-                {
-                    attribs[5] |= WGL_CONTEXT_DEBUG_BIT_ARB;
-                }
 
                 // Create new rendering context
                 // In order to create new OpenGL rendering context we have to call function wglCreateContextAttribsARB(),
@@ -191,7 +196,7 @@ GLContext::GLContext(const EngineGLCreateInfo& InitAttribs,
     }
     else
     {
-        auto CurrentCtx = wglGetCurrentContext();
+        HGLRC CurrentCtx = wglGetCurrentContext();
         if (CurrentCtx == 0)
         {
             LOG_ERROR_AND_THROW("No current GL context found! Provide non-null handle to a native Window to create a GL context");

@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,8 +44,8 @@ void ValidatePipelineResourceSignatureDescD3D11(const PipelineResourceSignatureD
 {
     for (Uint32 i = 0; i < Desc.NumResources; ++i)
     {
-        const auto& ResDesc = Desc.Resources[i];
-        const auto  Range   = PipelineResourceSignatureD3D11Impl::ShaderResourceTypeToRange(ResDesc.ResourceType);
+        const PipelineResourceDesc& ResDesc = Desc.Resources[i];
+        const D3D11_RESOURCE_RANGE  Range   = PipelineResourceSignatureD3D11Impl::ShaderResourceTypeToRange(ResDesc.ResourceType);
 
         constexpr SHADER_TYPE UAVStages = SHADER_TYPE_PIXEL | SHADER_TYPE_COMPUTE;
         if (Range == D3D11_RESOURCE_RANGE_UAV && (ResDesc.ShaderStages & ~UAVStages) != 0)
@@ -78,7 +78,7 @@ PipelineResourceSignatureD3D11Impl::PipelineResourceSignatureD3D11Impl(IReferenc
             },
             [this]() //
             {
-                return ShaderResourceCacheD3D11::GetRequiredMemorySize(m_ResourceCounters);
+                return ShaderResourceCacheD3D11::GetRequiredMemorySize(m_ResourceCounters, m_pInlineConstantBuffers, m_NumInlineConstantBuffers);
             });
     }
     catch (...)
@@ -93,14 +93,14 @@ D3D11_RESOURCE_RANGE PipelineResourceSignatureD3D11Impl::ShaderResourceTypeToRan
     static_assert(SHADER_RESOURCE_TYPE_LAST == 8, "Please update the switch below to handle the new shader resource type");
     switch (Type)
     {
-        // clang-format off
-        case SHADER_RESOURCE_TYPE_CONSTANT_BUFFER:  return D3D11_RESOURCE_RANGE_CBV;
-        case SHADER_RESOURCE_TYPE_TEXTURE_SRV:      return D3D11_RESOURCE_RANGE_SRV;
-        case SHADER_RESOURCE_TYPE_BUFFER_SRV:       return D3D11_RESOURCE_RANGE_SRV;
-        case SHADER_RESOURCE_TYPE_TEXTURE_UAV:      return D3D11_RESOURCE_RANGE_UAV;
-        case SHADER_RESOURCE_TYPE_BUFFER_UAV:       return D3D11_RESOURCE_RANGE_UAV;
-        case SHADER_RESOURCE_TYPE_SAMPLER:          return D3D11_RESOURCE_RANGE_SAMPLER;
-        case SHADER_RESOURCE_TYPE_INPUT_ATTACHMENT: return D3D11_RESOURCE_RANGE_SRV;
+            // clang-format off
+        case SHADER_RESOURCE_TYPE_CONSTANT_BUFFER:   return D3D11_RESOURCE_RANGE_CBV;
+        case SHADER_RESOURCE_TYPE_TEXTURE_SRV:       return D3D11_RESOURCE_RANGE_SRV;
+        case SHADER_RESOURCE_TYPE_BUFFER_SRV:        return D3D11_RESOURCE_RANGE_SRV;
+        case SHADER_RESOURCE_TYPE_TEXTURE_UAV:       return D3D11_RESOURCE_RANGE_UAV;
+        case SHADER_RESOURCE_TYPE_BUFFER_UAV:        return D3D11_RESOURCE_RANGE_UAV;
+        case SHADER_RESOURCE_TYPE_SAMPLER:           return D3D11_RESOURCE_RANGE_SAMPLER;
+        case SHADER_RESOURCE_TYPE_INPUT_ATTACHMENT:  return D3D11_RESOURCE_RANGE_SRV;
             // clang-format on
         default:
             UNEXPECTED("Unsupported resource type");
@@ -174,6 +174,7 @@ void PipelineResourceSignatureD3D11Impl::CreateLayout(const bool IsSerialized)
 
     D3D11ShaderResourceCounters StaticResCounters;
 
+    Uint32 InlineConstantBufferIdx = 0;
     for (Uint32 i = 0; i < m_Desc.NumResources; ++i)
     {
         const PipelineResourceDesc& ResDesc = GetResourceDesc(i);
@@ -198,7 +199,12 @@ void PipelineResourceSignatureD3D11Impl::CreateLayout(const bool IsSerialized)
         {
             const D3D11_RESOURCE_RANGE Range = ShaderResourceTypeToRange(ResDesc.ResourceType);
 
-            AllocBindPoints(m_ResourceCounters, BindPoints, ResDesc.ShaderStages, ResDesc.ArraySize, Range);
+            VERIFY((ResDesc.Flags & PIPELINE_RESOURCE_FLAG_INLINE_CONSTANTS) == 0 || ResDesc.ResourceType == SHADER_RESOURCE_TYPE_CONSTANT_BUFFER,
+                   "Only constant buffers can have inline constants flag");
+            // For inline constants, ArraySize holds the number of 4-byte constants, while
+            // the resource occupies a single constant buffer slot.
+            const Uint32 ArraySize = ResDesc.GetArraySize();
+            AllocBindPoints(m_ResourceCounters, BindPoints, ResDesc.ShaderStages, ArraySize, Range);
             if (ResDesc.VarType == SHADER_RESOURCE_VARIABLE_TYPE_STATIC)
             {
                 // Since resources in the static cache are indexed by the same bindings, we need to
@@ -212,19 +218,39 @@ void PipelineResourceSignatureD3D11Impl::CreateLayout(const bool IsSerialized)
                 }
             }
 
-            if (Range == D3D11_RESOURCE_RANGE_CBV && (ResDesc.Flags & PIPELINE_RESOURCE_FLAG_NO_DYNAMIC_BUFFERS) == 0)
+            if (Range == D3D11_RESOURCE_RANGE_CBV &&
+                (ResDesc.Flags & (PIPELINE_RESOURCE_FLAG_NO_DYNAMIC_BUFFERS | PIPELINE_RESOURCE_FLAG_INLINE_CONSTANTS)) == 0)
             {
                 // Set corresponding bits in m_DynamicCBSlotsMask
                 for (SHADER_TYPE ShaderStages = ResDesc.ShaderStages; ShaderStages != SHADER_TYPE_UNKNOWN;)
                 {
                     const Int32  ShaderInd = ExtractFirstShaderStageIndex(ShaderStages);
                     const Uint16 BindPoint = Uint16{BindPoints[ShaderInd]};
-                    for (Uint32 elem = 0; elem < ResDesc.ArraySize; ++elem)
+                    for (Uint32 elem = 0; elem < ArraySize; ++elem)
                     {
                         VERIFY_EXPR(BindPoint + elem < Uint32{sizeof(m_DynamicCBSlotsMask[0]) * 8});
                         m_DynamicCBSlotsMask[ShaderInd] |= 1u << (BindPoint + elem);
                     }
                 }
+            }
+
+            if (ResDesc.Flags & PIPELINE_RESOURCE_FLAG_INLINE_CONSTANTS)
+            {
+                // Inline constant buffers are handled mostly like regular constant buffers. The only
+                // difference is that the buffer is created internally here and is not expected to be bound.
+                // It is updated by UpdateInlineConstantBuffers() method.
+
+                VERIFY(ResDesc.ResourceType == SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, "Only constant buffers can have INLINE_CONSTANTS flag");
+                InlineConstantBufferAttribsD3D11& InlineCBAttribs{m_pInlineConstantBuffers[InlineConstantBufferIdx++]};
+                InlineCBAttribs.BindPoints   = BindPoints;
+                InlineCBAttribs.NumConstants = ResDesc.ArraySize;
+
+                // All SRBs created from this signature will share the same inline constant buffer.
+                // An alternative design is to have a separate inline constant buffer for each SRB,
+                // which will allow skipping buffer update if the inline constants are not changed.
+                // However, this will increase memory consumption as each SRB will have its own copy of the inline CB.
+                // Besides, inline constants are expected to change frequently, so skipping updates is unlikely.
+                InlineCBAttribs.pBuffer = CreateInlineConstantBuffer(ResDesc.Name, ResDesc.ArraySize);
             }
         }
         else
@@ -253,10 +279,11 @@ void PipelineResourceSignatureD3D11Impl::CreateLayout(const bool IsSerialized)
                           "Deserialized immutable sampler flag is invalid");
         }
     }
+    VERIFY_EXPR(InlineConstantBufferIdx == m_NumInlineConstantBuffers);
 
     if (m_pStaticResCache)
     {
-        m_pStaticResCache->Initialize(StaticResCounters, GetRawAllocator(), nullptr);
+        m_pStaticResCache->Initialize(StaticResCounters, GetRawAllocator(), nullptr, m_pInlineConstantBuffers, m_NumInlineConstantBuffers);
         VERIFY_EXPR(m_pStaticResCache->IsInitialized());
     }
 }
@@ -289,12 +316,20 @@ void PipelineResourceSignatureD3D11Impl::CopyStaticResources(ShaderResourceCache
         switch (ShaderResourceTypeToRange(ResDesc.ResourceType))
         {
             case D3D11_RESOURCE_RANGE_CBV:
-                for (Uint32 ArrInd = 0; ArrInd < ResDesc.ArraySize; ++ArrInd)
+                if (ResDesc.Flags & PIPELINE_RESOURCE_FLAG_INLINE_CONSTANTS)
                 {
-                    if (!DstResourceCache.CopyResource<D3D11_RESOURCE_RANGE_CBV>(SrcResourceCache, ResAttr.BindPoints + ArrInd))
+                    VERIFY(ResDesc.Flags == PIPELINE_RESOURCE_FLAG_INLINE_CONSTANTS, "INLINE_CONSTANTS flag is not compatible with other flags");
+                    DstResourceCache.CopyInlineConstants(SrcResourceCache, ResAttr.BindPoints, ResDesc.ArraySize);
+                }
+                else
+                {
+                    for (Uint32 ArrInd = 0; ArrInd < ResDesc.ArraySize; ++ArrInd)
                     {
-                        if (DstCacheType == ResourceCacheContentType::SRB)
-                            LOG_ERROR_MESSAGE("No resource is assigned to static shader variable '", GetShaderResourcePrintName(ResDesc, ArrInd), "' in pipeline resource signature '", m_Desc.Name, "'.");
+                        if (!DstResourceCache.CopyResource<D3D11_RESOURCE_RANGE_CBV>(SrcResourceCache, ResAttr.BindPoints + ArrInd))
+                        {
+                            if (DstCacheType == ResourceCacheContentType::SRB)
+                                LOG_ERROR_MESSAGE("No resource is assigned to static shader variable '", GetShaderResourcePrintName(ResDesc, ArrInd), "' in pipeline resource signature '", m_Desc.Name, "'.");
+                        }
                     }
                 }
                 break;
@@ -353,13 +388,14 @@ void PipelineResourceSignatureD3D11Impl::CopyStaticResources(ShaderResourceCache
 
 void PipelineResourceSignatureD3D11Impl::InitSRBResourceCache(ShaderResourceCacheD3D11& ResourceCache)
 {
-    ResourceCache.Initialize(m_ResourceCounters, m_SRBMemAllocator.GetResourceCacheDataAllocator(0), &m_DynamicCBSlotsMask);
+    ResourceCache.Initialize(m_ResourceCounters, m_SRBMemAllocator.GetResourceCacheDataAllocator(0), &m_DynamicCBSlotsMask,
+                             m_pInlineConstantBuffers, m_NumInlineConstantBuffers);
     VERIFY_EXPR(ResourceCache.IsInitialized());
 
     // Copy immutable samplers.
     for (Uint32 i = 0; i < m_Desc.NumImmutableSamplers; ++i)
     {
-        const auto& ImtblSampAttr = GetImmutableSamplerAttribs(i);
+        const ImmutableSamplerAttribsD3D11& ImtblSampAttr = GetImmutableSamplerAttribs(i);
         VERIFY_EXPR(ImtblSampAttr.IsAllocated());
         VERIFY_EXPR(m_pImmutableSamplers != nullptr && m_pImmutableSamplers[i]);
         VERIFY_EXPR(ImtblSampAttr.ArraySize > 0);
@@ -375,13 +411,13 @@ void PipelineResourceSignatureD3D11Impl::UpdateShaderResourceBindingMap(Resource
                                                                         const D3D11ShaderResourceCounters& BaseBindings) const
 {
     VERIFY(ShaderStage != SHADER_TYPE_UNKNOWN && IsPowerOfTwo(ShaderStage), "Only single shader stage must be provided.");
-    const auto ShaderInd = GetShaderTypeIndex(ShaderStage);
+    const Int32 ShaderInd = GetShaderTypeIndex(ShaderStage);
 
     for (Uint32 r = 0, ResCount = GetTotalResourceCount(); r < ResCount; ++r)
     {
-        const auto& ResDesc = GetResourceDesc(r);
-        const auto& ResAttr = GetResourceAttribs(r);
-        const auto  Range   = ShaderResourceTypeToRange(ResDesc.ResourceType);
+        const PipelineResourceDesc&         ResDesc = GetResourceDesc(r);
+        const PipelineResourceAttribsD3D11& ResAttr = GetResourceAttribs(r);
+        const D3D11_RESOURCE_RANGE          Range   = ShaderResourceTypeToRange(ResDesc.ResourceType);
 
         if ((ResDesc.ShaderStages & ShaderStage) != 0)
         {
@@ -389,11 +425,12 @@ void PipelineResourceSignatureD3D11Impl::UpdateShaderResourceBindingMap(Resource
             ResourceBinding::BindInfo BindInfo //
                 {
                     Uint32{BaseBindings[Range][ShaderInd]} + Uint32{ResAttr.BindPoints[ShaderInd]},
-                    0u, // register space is not supported
-                    ResDesc.ArraySize,
-                    ResDesc.ResourceType //
+                    0u,                     // register space is not supported
+                    ResDesc.GetArraySize(), // For inline constants, ArraySize holds the number of 4-byte constants,
+                                            // while the resource occupies a single constant buffer slot.
+                    ResDesc.ResourceType,
                 };
-            auto IsUnique = ResourceMap.emplace(HashMapStringKey{ResDesc.Name}, BindInfo).second;
+            bool IsUnique = ResourceMap.emplace(HashMapStringKey{ResDesc.Name}, BindInfo).second;
             VERIFY(IsUnique, "Shader resource '", ResDesc.Name,
                    "' already present in the binding map. Every shader resource in PSO must be unambiguously defined by "
                    "only one resource signature. This error should've been caught by ValidatePipelineResourceSignatures().");
@@ -407,9 +444,9 @@ void PipelineResourceSignatureD3D11Impl::UpdateShaderResourceBindingMap(Resource
     //
     for (Uint32 samp = 0, SampCount = GetImmutableSamplerCount(); samp < SampCount; ++samp)
     {
-        const auto& ImtblSam = GetImmutableSamplerDesc(samp);
-        const auto& SampAttr = GetImmutableSamplerAttribs(samp);
-        const auto  Range    = D3D11_RESOURCE_RANGE_SAMPLER;
+        const ImmutableSamplerDesc&         ImtblSam = GetImmutableSamplerDesc(samp);
+        const ImmutableSamplerAttribsD3D11& SampAttr = GetImmutableSamplerAttribs(samp);
+        const D3D11_RESOURCE_RANGE          Range    = D3D11_RESOURCE_RANGE_SAMPLER;
 
         VERIFY_EXPR(SampAttr.IsAllocated());
         if ((ImtblSam.ShaderStages & ShaderStage) != 0)
@@ -432,7 +469,7 @@ void PipelineResourceSignatureD3D11Impl::UpdateShaderResourceBindingMap(Resource
 #ifdef DILIGENT_DEBUG
             if (!it_inserted.second)
             {
-                const auto& ExistingBindInfo = it_inserted.first->second;
+                const ResourceBinding::BindInfo& ExistingBindInfo = it_inserted.first->second;
                 VERIFY(ExistingBindInfo.BindPoint == BindInfo.BindPoint,
                        "Bind point defined by the immutable sampler attribs is inconsistent with the bind point defined by the sampler resource. "
                        "This may be a bug in CreateLayout().");
@@ -445,6 +482,30 @@ void PipelineResourceSignatureD3D11Impl::UpdateShaderResourceBindingMap(Resource
     }
 }
 
+void PipelineResourceSignatureD3D11Impl::UpdateInlineConstantBuffers(const ShaderResourceCacheD3D11& ResourceCache, ID3D11DeviceContext* pd3d11Ctx) const
+{
+    for (Uint32 i = 0; i < m_NumInlineConstantBuffers; ++i)
+    {
+        const InlineConstantBufferAttribsD3D11& InlineCBAttr = GetInlineConstantBufferAttribs(i);
+
+        ID3D11Buffer*                             pd3d11CB = nullptr;
+        const ShaderResourceCacheD3D11::CachedCB& InlineCB = ResourceCache.GetResource<D3D11_RESOURCE_RANGE_CBV>(InlineCBAttr.BindPoints, &pd3d11CB);
+        VERIFY(InlineCBAttr.NumConstants * sizeof(Uint32) == InlineCB.RangeSize, "Inline constant buffer size mismatch");
+        VERIFY(InlineCB.pInlineConstantData != nullptr, "Inline constant data pointer is null");
+
+        D3D11_MAPPED_SUBRESOURCE MappedData{};
+        if (SUCCEEDED(pd3d11Ctx->Map(pd3d11CB, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedData)))
+        {
+            memcpy(MappedData.pData, InlineCB.pInlineConstantData, InlineCBAttr.NumConstants * sizeof(Uint32));
+            pd3d11Ctx->Unmap(pd3d11CB, 0);
+        }
+        else
+        {
+            DEV_ERROR("Failed to map inline constant buffer");
+        }
+    }
+}
+
 #ifdef DILIGENT_DEVELOPMENT
 bool PipelineResourceSignatureD3D11Impl::DvpValidateCommittedResource(const D3DShaderResourceAttribs& D3DAttribs,
                                                                       Uint32                          ResIndex,
@@ -453,11 +514,11 @@ bool PipelineResourceSignatureD3D11Impl::DvpValidateCommittedResource(const D3DS
                                                                       const char*                     PSOName) const
 {
     VERIFY_EXPR(ResIndex < m_Desc.NumResources);
-    const auto& ResDesc = m_Desc.Resources[ResIndex];
-    const auto& ResAttr = m_pResourceAttribs[ResIndex];
+    const PipelineResourceDesc&         ResDesc = m_Desc.Resources[ResIndex];
+    const PipelineResourceAttribsD3D11& ResAttr = m_pResourceAttribs[ResIndex];
     VERIFY(strcmp(ResDesc.Name, D3DAttribs.Name) == 0, "Inconsistent resource names");
 
-    VERIFY_EXPR(D3DAttribs.BindCount <= ResDesc.ArraySize);
+    VERIFY_EXPR(D3DAttribs.BindCount <= ResDesc.GetArraySize());
 
     bool BindingsOK = true;
     switch (ShaderResourceTypeToRange(ResDesc.ResourceType))
@@ -497,7 +558,7 @@ bool PipelineResourceSignatureD3D11Impl::DvpValidateCommittedResource(const D3DS
                     continue;
                 }
 
-                const auto& SRV = ResourceCache.GetResource<D3D11_RESOURCE_RANGE_SRV>(ResAttr.BindPoints + ArrInd);
+                const ShaderResourceCacheD3D11::CachedResource& SRV = ResourceCache.GetResource<D3D11_RESOURCE_RANGE_SRV>(ResAttr.BindPoints + ArrInd);
                 if (SRV.pTexture)
                 {
                     if (!ValidateResourceViewDimension(D3DAttribs.Name, D3DAttribs.BindCount, ArrInd, SRV.pView.RawPtr<TextureViewD3D11Impl>(),
@@ -523,7 +584,7 @@ bool PipelineResourceSignatureD3D11Impl::DvpValidateCommittedResource(const D3DS
                     BindingsOK = false;
                     continue;
                 }
-                const auto& UAV = ResourceCache.GetResource<D3D11_RESOURCE_RANGE_UAV>(ResAttr.BindPoints + ArrInd);
+                const ShaderResourceCacheD3D11::CachedResource& UAV = ResourceCache.GetResource<D3D11_RESOURCE_RANGE_UAV>(ResAttr.BindPoints + ArrInd);
                 if (UAV.pTexture)
                 {
                     if (!ValidateResourceViewDimension(D3DAttribs.Name, D3DAttribs.BindCount, ArrInd, UAV.pView.RawPtr<TextureViewD3D11Impl>(),
@@ -566,7 +627,7 @@ PipelineResourceSignatureD3D11Impl::PipelineResourceSignatureD3D11Impl(IReferenc
             },
             [this]() //
             {
-                return ShaderResourceCacheD3D11::GetRequiredMemorySize(m_ResourceCounters);
+                return ShaderResourceCacheD3D11::GetRequiredMemorySize(m_ResourceCounters, m_pInlineConstantBuffers, m_NumInlineConstantBuffers);
             });
     }
     catch (...)

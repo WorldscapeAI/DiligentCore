@@ -1,6 +1,8 @@
-if(PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS)
+if(PLATFORM_WIN32)
 
-    function(copy_required_dlls TARGET_NAME)
+    # Copies engine dlls to the target's output directory
+    function(copy_engine_dlls TARGET_NAME)
+        set(ENGINE_DLLS)
         if(D3D11_SUPPORTED)
             list(APPEND ENGINE_DLLS Diligent-GraphicsEngineD3D11-shared)
         endif()
@@ -26,69 +28,137 @@ if(PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS)
         foreach(DLL ${ENGINE_DLLS})
             add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "\"$<TARGET_FILE:${DLL}>\""
-                    "\"$<TARGET_FILE_DIR:${TARGET_NAME}>\"")
+                    "$<TARGET_FILE:${DLL}>"
+                    "$<TARGET_FILE_DIR:${TARGET_NAME}>")
+        endforeach(DLL)
+    endfunction()
+
+    # Copies shader compiler dlls to the target's output directory
+    #
+    # Arguments:
+    #   TARGET_NAME          - Name of the target to copy dlls for
+    #   D3D_COMPILER         - Indicates that D3Dcompiler_47.dll is required
+    #   DXCOMPILER           - Indicates that dxcompiler.dll and dxil.dll are required
+    #   DXCOMPILER_FOR_SPIRV - Indicates that spv_dxcompiler.dll is required
+    #
+    # Example:
+    #   copy_shader_compiler_dlls(MyTarget D3D_COMPILER YES DXCOMPILER YES)
+    function(copy_shader_compiler_dlls TARGET_NAME)
+        set(options)
+        set(oneValueArgs D3D_COMPILER DXCOMPILER DXCOMPILER_FOR_SPIRV)
+        set(multiValueArgs)
+        cmake_parse_arguments(PARSE_ARGV 1 arg "${options}" "${oneValueArgs}" "${multiValueArgs}")
+
+        set(SHADER_COMPILER_DLLS)
+
+        # D3Dcompiler_47.dll
+        if (arg_D3D_COMPILER AND D3D_COMPILER_PATH)
+            list(APPEND SHADER_COMPILER_DLLS "${D3D_COMPILER_PATH}")
+        endif()
+
+        # dxcompiler.dll and dxil.dll
+        if(arg_DXCOMPILER AND DXC_COMPILER_PATH AND DXIL_SIGNER_PATH)
+            # For the compiler to sign the bytecode, you have to have a copy of dxil.dll in
+            # the same folder as the dxcompiler.dll at runtime.
+
+            list(APPEND SHADER_COMPILER_DLLS "${DXC_COMPILER_PATH}")
+            list(APPEND SHADER_COMPILER_DLLS "${DXIL_SIGNER_PATH}")
+        endif()
+
+        foreach(DLL ${SHADER_COMPILER_DLLS})
+            add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DLL}"
+                    "$<TARGET_FILE_DIR:${TARGET_NAME}>")
         endforeach(DLL)
 
-        # Copy D3Dcompiler_47.dll, dxcompiler.dll, and dxil.dll
-        if(MSVC)
-            if ((D3D11_SUPPORTED OR D3D12_SUPPORTED) AND VS_D3D_COMPILER_PATH)
-                # Note that VS_D3D_COMPILER_PATH can only be used in a Visual Studio command
-                # and is not a valid path during CMake configuration
-                list(APPEND SHADER_COMPILER_DLLS ${VS_D3D_COMPILER_PATH})
-            endif()
-
-            if(D3D12_SUPPORTED AND VS_DXC_COMPILER_PATH AND VS_DXIL_SIGNER_PATH)
-                # For the compiler to sign the bytecode, you have to have a copy of dxil.dll in
-                # the same folder as the dxcompiler.dll at runtime.
-
-                # Note that VS_DXC_COMPILER_PATH and VS_DXIL_SIGNER_PATH can only be used in a Visual Studio command
-                # and are not valid paths during CMake configuration
-                list(APPEND SHADER_COMPILER_DLLS ${VS_DXC_COMPILER_PATH})
-                list(APPEND SHADER_COMPILER_DLLS ${VS_DXIL_SIGNER_PATH})
-            endif()
-
-            foreach(DLL ${SHADER_COMPILER_DLLS})
-                add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        ${DLL}
-                        "\"$<TARGET_FILE_DIR:${TARGET_NAME}>\"")
-            endforeach(DLL)
-
-            if(D3D12_SUPPORTED AND EXISTS ${DILIGENT_PIX_EVENT_RUNTIME_DLL_PATH})
-                add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        ${DILIGENT_PIX_EVENT_RUNTIME_DLL_PATH}
-                        "\"$<TARGET_FILE_DIR:${TARGET_NAME}>\"")
-            endif()
-
-            if(VULKAN_SUPPORTED)
-                if(NOT DEFINED DILIGENT_DXCOMPILER_FOR_SPIRV_PATH)
-                    message(FATAL_ERROR "DILIGENT_DXCOMPILER_FOR_SPIRV_PATH is undefined, check order of cmake includes")
-                endif()
-                if(EXISTS ${DILIGENT_DXCOMPILER_FOR_SPIRV_PATH})
-                    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                            ${DILIGENT_DXCOMPILER_FOR_SPIRV_PATH}
-                            "\"$<TARGET_FILE_DIR:${TARGET_NAME}>/spv_dxcompiler.dll\"")
-                endif()
-            endif()
+        # spv_dxcompiler.dll
+        if(arg_DXCOMPILER_FOR_SPIRV AND EXISTS "${DILIGENT_DXCOMPILER_FOR_SPIRV_PATH}")
+            add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DILIGENT_DXCOMPILER_FOR_SPIRV_PATH}"
+                    "$<TARGET_FILE_DIR:${TARGET_NAME}>/spv_dxcompiler.dll")
         endif()
     endfunction()
 
+    # Copies required dlls to the target's output directory
+    #
+    # The following dlls are copied:
+    #  - Engine dlls (GraphicsEngine*.dll)
+    #  - Archiver dll (Archiver*.dll)
+    #  - D3Dcompiler_47.dll
+    #  - Optional DXC dlls (dxcompiler.dll, dxil.dll, spv_dxcompiler.dll)
+    #
+    # Arguments:
+    #   TARGET_NAME  - Name of the target to copy dlls for
+    #   DXC_REQUIRED - Indicates that the target requires DXC compiler dlls
+    #                  (dxcompiler.dll, dxil.dll and spv_dxcompiler.dll)
+    #
+    # Example:
+    #   copy_required_dlls(MyTarget DXC_REQUIRED YES)
+    #
+    function(copy_required_dlls TARGET_NAME)
+        set(options)
+        set(oneValueArgs DXC_REQUIRED)
+        set(multiValueArgs)
+        cmake_parse_arguments(PARSE_ARGV 1 arg "${options}" "${oneValueArgs}" "${multiValueArgs}")
+
+        copy_engine_dlls(${TARGET_NAME})
+
+        # Copy D3Dcompiler_47.dll, dxcompiler.dll, and dxil.dll
+        set(D3D_COMPILER_REQUIRED NO)
+        set(DXCOMPILER_REQUIRED NO)
+        set(DXCOMPILER_FOR_SPIRV_REQUIRED NO)
+        
+        if (D3D11_SUPPORTED OR D3D12_SUPPORTED)
+            set(D3D_COMPILER_REQUIRED YES)
+        endif()
+
+        # Dawn uses DXC, so we need to copy the DXC dlls even if DXC_REQUIRED is not set
+        # to get consistent shader compilation results
+        if((arg_DXC_REQUIRED AND D3D12_SUPPORTED) OR WEBGPU_SUPPORTED)
+            set(DXCOMPILER_REQUIRED YES)
+        endif()
+
+        if(arg_DXC_REQUIRED AND VULKAN_SUPPORTED)
+            set(DXCOMPILER_FOR_SPIRV_REQUIRED YES)
+        endif()
+
+        copy_shader_compiler_dlls(${TARGET_NAME}
+            D3D_COMPILER ${D3D_COMPILER_REQUIRED}
+            DXCOMPILER ${DXCOMPILER_REQUIRED}
+            DXCOMPILER_FOR_SPIRV ${DXCOMPILER_FOR_SPIRV_REQUIRED}
+        )
+
+        if(D3D12_SUPPORTED AND EXISTS "${DILIGENT_PIX_EVENT_RUNTIME_DLL_PATH}")
+            add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DILIGENT_PIX_EVENT_RUNTIME_DLL_PATH}"
+                    "$<TARGET_FILE_DIR:${TARGET_NAME}>")
+        endif()
+    endfunction()
+
+elseif(PLATFORM_UNIVERSAL_WINDOWS)
+
+    # Adds commands to package required DLLs into the appx package
+    # Example:
+    #   package_required_dlls(MyTarget DXC_REQUIRED YES)
     function(package_required_dlls TARGET_NAME)
-        if(D3D12_SUPPORTED AND VS_DXC_COMPILER_PATH AND VS_DXIL_SIGNER_PATH)
+        set(options)
+        set(oneValueArgs DXC_REQUIRED)
+        set(multiValueArgs)
+        cmake_parse_arguments(PARSE_ARGV 1 arg "${options}" "${oneValueArgs}" "${multiValueArgs}")
+
+        if(arg_DXC_REQUIRED AND D3D12_SUPPORTED AND DXC_COMPILER_PATH AND DXIL_SIGNER_PATH)
             # Copy the dlls to the project's CMake binary dir
 
-            # Note that VS_DXC_COMPILER_PATH and VS_DXIL_SIGNER_PATH can only be used in a Visual Studio command
-            # and are not valid paths during CMake configuration
             add_custom_command(TARGET ${TARGET_NAME} PRE_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    ${VS_DXC_COMPILER_PATH}
-                    "\"${CMAKE_CURRENT_BINARY_DIR}/dxcompiler.dll\""
+                    "${DXC_COMPILER_PATH}"
+                    "${CMAKE_CURRENT_BINARY_DIR}/dxcompiler.dll"
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    ${VS_DXIL_SIGNER_PATH}
-                    "\"${CMAKE_CURRENT_BINARY_DIR}/dxil.dll\"")
+                    "${DXIL_SIGNER_PATH}"
+                    "${CMAKE_CURRENT_BINARY_DIR}/dxil.dll")
             set(DLLS "${CMAKE_CURRENT_BINARY_DIR}/dxcompiler.dll" "${CMAKE_CURRENT_BINARY_DIR}/dxil.dll")
 
             # Add the dlls to the target project as source files
@@ -101,6 +171,10 @@ if(PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS)
                 VS_DEPLOYMENT_LOCATION ".")
         endif()
     endfunction()
+
+endif()
+
+if (PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS)
 
     # Set dll output name by adding _{32|64}{r|d} suffix
     function(set_dll_output_name TARGET_NAME OUTPUT_NAME_WITHOUT_SUFFIX)
@@ -117,7 +191,7 @@ if(PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS)
         endforeach()
     endfunction()
 
-endif(PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS)
+endif()
 
 
 function(set_common_target_properties TARGET)
@@ -136,7 +210,7 @@ function(set_common_target_properties TARGET)
 
     get_target_property(TARGET_TYPE ${TARGET} TYPE)
 
-    set(CXX_STANDARD 14)
+    set(CXX_STANDARD 17)
     if(MIN_CXX_STANDARD)
         if(MIN_CXX_STANDARD GREATER ${CXX_STANDARD})
             set(CXX_STANDARD ${MIN_CXX_STANDARD})
@@ -145,7 +219,7 @@ function(set_common_target_properties TARGET)
 
     set_target_properties(${TARGET} PROPERTIES
         # It is crucial to set CXX_STANDARD flag to only affect c++ files and avoid failures compiling c-files:
-        # error: invalid argument '-std=c++14' not allowed with 'C/ObjC'
+        # error: invalid argument '-std=c++17' not allowed with 'C/ObjC'
         CXX_STANDARD ${CXX_STANDARD}
         CXX_STANDARD_REQUIRED ON
     )
@@ -412,6 +486,7 @@ function(add_format_validation_target MODULE_NAME MODULE_ROOT_PATH IDE_FOLDER)
     if (NOT ("${DILIGENT_CORE_SOURCE_DIR}" STREQUAL "${MODULE_ROOT_PATH}"))
         # Start by copying .clang-format file to the module's root folder
         add_custom_command(TARGET ${MODULE_NAME}-ValidateFormatting
+            PRE_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${DILIGENT_CORE_SOURCE_DIR}/.clang-format" "${MODULE_ROOT_PATH}/.clang-format"
         )
     endif()
@@ -427,6 +502,7 @@ function(add_format_validation_target MODULE_NAME MODULE_ROOT_PATH IDE_FOLDER)
     if (RUN_VALIDATION_SCRIPT)
         # Run the format validation script
         add_custom_command(TARGET ${MODULE_NAME}-ValidateFormatting
+            PRE_BUILD
             COMMAND ${RUN_VALIDATION_SCRIPT}
             WORKING_DIRECTORY "${MODULE_ROOT_PATH}/BuildTools/FormatValidation"
             COMMENT "Validating ${MODULE_NAME} module's source code formatting..."
@@ -473,5 +549,85 @@ function(set_targets_emscripten_properties)
                     "-mbulk-memory")
             endif()
         endforeach()
+    endif()
+endfunction()
+
+
+# Links the static library <lib> to the target <tgt> as a whole archive.
+function(target_link_whole_archive tgt lib)
+    if(MSVC)
+        target_link_libraries(${tgt} PRIVATE ${lib})
+    else()
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+            # Use the new $<LINK_LIBRARY:WHOLE_ARCHIVE,lib> generator expression.
+            # This one argument expands to the right flags automatically on
+            # every toolchain (-Wl,--whole-archive/--no-whole-archive on ELF,
+            # -Wl,-force_load on Apple, /WHOLEARCHIVE on MSVC, ...).
+            target_link_libraries(
+                ${tgt} PRIVATE
+                "$<LINK_LIBRARY:WHOLE_ARCHIVE,${lib}>"
+            )
+        else()
+            # Legacy toolchains: add the flags by hand.
+            if(APPLE)
+                target_link_libraries(
+                    ${tgt} PRIVATE
+                    "-Wl,-force_load,$<TARGET_FILE:${lib}>"
+                )
+            else()
+                target_link_libraries(
+                    ${tgt} PRIVATE
+                    "-Wl,--whole-archive" ${lib} "-Wl,--no-whole-archive"
+                )
+            endif()
+        endif()
+    endif()
+endfunction()
+
+
+# Converts shaders to headers and generates master header with the list of all files
+function(convert_shaders_to_headers _SHADERS _SHADER_OUTPUT_DIR _SHADERS_LIST_FILE _SHADERS_INC_LIST)
+    if(NOT FILE2STRING_PATH STREQUAL "")
+        find_package(Python3 REQUIRED)
+
+        file(MAKE_DIRECTORY ${_SHADER_OUTPUT_DIR})
+
+        file(WRITE ${_SHADERS_LIST_FILE}
+            "static const MemoryShaderSourceFileInfo g_Shaders[] =\n"
+            "{"
+            )
+
+        foreach(FILE ${_SHADERS})
+            get_filename_component(FILE_NAME ${FILE} NAME)
+            set(CONVERTED_FILE ${_SHADER_OUTPUT_DIR}/${FILE_NAME}.h)
+            add_custom_command(OUTPUT ${CONVERTED_FILE}
+                               COMMAND ${Python3_EXECUTABLE} ${FILE2STRING_PATH} ${FILE} ${CONVERTED_FILE} --strip-comments
+                               DEPENDS ${FILE}
+                               COMMENT "Processing shader ${FILE}"
+                               VERBATIM)
+
+            string(REPLACE "." "_" VAR_NAME "${FILE_NAME}")
+            file(APPEND ${_SHADERS_LIST_FILE}
+                    "\n    {"
+                    "\n        \"${FILE_NAME}\","
+                    "\n        #include \"${FILE_NAME}.h\""
+                    "\n    },"
+                )
+
+                list(APPEND SHADERS_INC_LIST ${CONVERTED_FILE})
+        endforeach()
+
+        file(APPEND ${_SHADERS_LIST_FILE}
+            "\n};\n"
+            )
+
+        set_source_files_properties(
+            ${SHADERS_INC_LIST}
+            PROPERTIES GENERATED TRUE
+        )
+
+        set(${_SHADERS_INC_LIST} ${SHADERS_INC_LIST} PARENT_SCOPE)
+    else()
+        message(WARNING "File2String utility is currently unavailable on this host system. This is not an issues unless you modify shaders")
     endif()
 endfunction()

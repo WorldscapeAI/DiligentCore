@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -79,14 +79,15 @@ class ShaderVariableManagerGL;
 
 struct PipelineResourceAttribsGL;
 struct ImmutableSamplerAttribsGL;
+struct InlineConstantBufferAttribsGL;
 struct PipelineResourceSignatureInternalDataGL;
 
 struct EngineGLImplTraits
 {
 #if PLATFORM_WIN32 || PLATFORM_LINUX || PLATFORM_MACOS
-    static constexpr auto DeviceType = RENDER_DEVICE_TYPE_GL;
+    static constexpr RENDER_DEVICE_TYPE DeviceType = RENDER_DEVICE_TYPE_GL;
 #elif PLATFORM_ANDROID || PLATFORM_IOS || PLATFORM_WEB
-    static constexpr auto DeviceType = RENDER_DEVICE_TYPE_GL;
+    static constexpr RENDER_DEVICE_TYPE DeviceType = RENDER_DEVICE_TYPE_GL;
 #else
 #    error Unsupported platform
 #endif
@@ -136,6 +137,7 @@ struct EngineGLImplTraits
 
     using PipelineResourceAttribsType               = PipelineResourceAttribsGL;
     using ImmutableSamplerAttribsType               = ImmutableSamplerAttribsGL;
+    using InlineConstantBufferAttribsType           = InlineConstantBufferAttribsGL;
     using PipelineResourceSignatureInternalDataType = PipelineResourceSignatureInternalDataGL;
 };
 

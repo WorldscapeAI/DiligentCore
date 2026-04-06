@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -87,7 +87,7 @@ void ShaderVariableManagerVk::Initialize(const PipelineResourceSignatureVkImpl& 
                                          SHADER_TYPE                            ShaderType)
 {
     VERIFY_EXPR(m_NumVariables == 0);
-    const auto MemSize = GetRequiredMemorySize(Signature, AllowedVarTypes, NumAllowedTypes, ShaderType, &m_NumVariables);
+    const size_t MemSize = GetRequiredMemorySize(Signature, AllowedVarTypes, NumAllowedTypes, ShaderType, &m_NumVariables);
 
     if (m_NumVariables == 0)
         return;
@@ -145,7 +145,7 @@ Uint32 ShaderVariableManagerVk::GetVariableIndex(const ShaderVariableVkImpl& Var
         return ~0u;
     }
 
-    const auto Offset = reinterpret_cast<const Uint8*>(&Variable) - reinterpret_cast<Uint8*>(m_pVariables);
+    const ptrdiff_t Offset = reinterpret_cast<const Uint8*>(&Variable) - reinterpret_cast<Uint8*>(m_pVariables);
     DEV_CHECK_ERR(Offset % sizeof(ShaderVariableVkImpl) == 0, "Offset is not multiple of ShaderVariableVkImpl class size");
     const Uint32 Index = static_cast<Uint32>(Offset / sizeof(ShaderVariableVkImpl));
     if (Index < m_NumVariables)
@@ -286,12 +286,13 @@ BindResourceHelper::BindResourceHelper(const PipelineResourceSignatureVkImpl& Si
     m_DstRes            {m_CachedSet.GetResource(m_DstResCacheOffset)}
 // clang-format on
 {
-    VERIFY(ArrayIndex < m_ResDesc.ArraySize, "Array index is out of range, but it should've been corrected by ShaderVariableBase::SetArray()");
+    // For inline constants, GetArraySize() returns 1 (actual array size), while ArraySize is the number of constants
+    VERIFY(ArrayIndex < m_ResDesc.GetArraySize(), "Array index is out of range, but it should've been corrected by ShaderVariableBase::SetArray()");
     VERIFY(m_DstRes.Type == m_Attribs.GetDescriptorType(), "Inconsistent types");
 
 #ifdef DILIGENT_DEBUG
     {
-        auto vkDescrSet = m_CachedSet.GetVkDescriptorSet();
+        VkDescriptorSet vkDescrSet = m_CachedSet.GetVkDescriptorSet();
         if (m_CacheType == ResourceCacheContentType::SRB)
         {
             if (m_ResDesc.VarType == SHADER_RESOURCE_VARIABLE_TYPE_STATIC ||
@@ -650,13 +651,36 @@ void ShaderVariableManagerVk::SetBufferDynamicOffset(Uint32 ResIndex,
     m_ResourceCache.SetDynamicBufferOffset(Attribs.DescrSet, DstResCacheOffset, BufferDynamicOffset);
 }
 
+void ShaderVariableManagerVk::SetInlineConstants(Uint32      ResIndex,
+                                                 const void* pConstants,
+                                                 Uint32      FirstConstant,
+                                                 Uint32      NumConstants)
+{
+    const PipelineResourceAttribsVk& Attribs     = m_pSignature->GetResourceAttribs(ResIndex);
+    const ResourceCacheContentType   CacheType   = m_ResourceCache.GetContentType();
+    const Uint32                     CacheOffset = Attribs.CacheOffset(CacheType);
+
+#ifdef DILIGENT_DEVELOPMENT
+    {
+        const PipelineResourceDesc& ResDesc = m_pSignature->GetResourceDesc(ResIndex);
+        VerifyInlineConstants(ResDesc, pConstants, FirstConstant, NumConstants);
+    }
+#endif
+
+    // All inline constants use the same path at PRS level - store data in the resource cache.
+    // The data will be used either for push constants (vkCmdPushConstants) or emulated buffers
+    // depending on the PSO's selection.
+    m_ResourceCache.SetInlineConstants(Attribs.DescrSet, CacheOffset, pConstants, FirstConstant, NumConstants);
+}
+
 IDeviceObject* ShaderVariableManagerVk::Get(Uint32 ArrayIndex, Uint32 ResIndex) const
 {
     const PipelineResourceDesc&      ResDesc     = GetResourceDesc(ResIndex);
     const PipelineResourceAttribsVk& Attribs     = GetResourceAttribs(ResIndex);
     const Uint32                     CacheOffset = Attribs.CacheOffset(m_ResourceCache.GetContentType());
 
-    VERIFY_EXPR(ArrayIndex < ResDesc.ArraySize);
+    // For inline constants, GetArraySize() returns 1 (actual array size), while ArraySize is the number of constants
+    VERIFY_EXPR(ArrayIndex < ResDesc.GetArraySize());
 
     if (Attribs.DescrSet < m_ResourceCache.GetNumDescriptorSets())
     {

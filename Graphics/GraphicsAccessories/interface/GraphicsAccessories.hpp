@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -495,6 +495,8 @@ const char* GetShaderCodeVariableClassString(SHADER_CODE_VARIABLE_CLASS Class);
 
 const char* GetShaderCodeBasicTypeString(SHADER_CODE_BASIC_TYPE Type);
 
+Uint32 GetShaderCodeBasicTypeBitSize(SHADER_CODE_BASIC_TYPE Type);
+
 /// Returns the string containing the shader buffer description.
 String GetShaderCodeBufferDescString(const ShaderCodeBufferDesc& Desc, size_t GlobalIdent = 0, size_t MemberIdent = 2);
 
@@ -527,6 +529,9 @@ Uint32 ComputeMipLevelsCount(Uint32 Width, Uint32 Height);
 
 /// Returns the number of mip levels for the specified texture dimensions
 Uint32 ComputeMipLevelsCount(Uint32 Width, Uint32 Height, Uint32 Depth);
+
+/// Returns the number of mip levels for the specified texture description
+Uint32 ComputeMipLevelsCount(const TextureDesc& TexDesc);
 
 /// Checks if the specified filter type is a point filter
 inline bool IsComparisonFilter(FILTER_TYPE FilterType)
@@ -856,6 +861,10 @@ TEXTURE_FORMAT TypelessFormatToUnorm(TEXTURE_FORMAT Fmt);
 /// If the format is not typeless, or cannot be converted to SRGB, it is returned as is.
 TEXTURE_FORMAT TypelessFormatToSRGB(TEXTURE_FORMAT Fmt);
 
+/// Converts format to a corresponding typeless format.
+/// If the format cannot be converted to typeless, it is returned as is.
+TEXTURE_FORMAT FormatToTypeless(TEXTURE_FORMAT Fmt);
+
 /// Checks if the format is an SRGB format
 bool IsSRGBFormat(TEXTURE_FORMAT Fmt);
 
@@ -1052,7 +1061,7 @@ std::string GetDeviceFeaturesString(const FeaturesType& Features,
                                     FeatureStateStr += GetDeviceFeatureStateString(State);
 
                                     size_t col    = FeatureStrings.size() % NumColumns;
-                                    ColWidth[col] = std::max(ColWidth[col], FeatureStateStr.length());
+                                    ColWidth[col] = (std::max)(ColWidth[col], FeatureStateStr.length());
 
                                     FeatureStrings.emplace_back(std::move(FeatureStateStr));
                                 }

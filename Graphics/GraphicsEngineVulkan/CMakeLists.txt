@@ -1,5 +1,8 @@
 cmake_minimum_required (VERSION 3.10)
 
+include(../../BuildTools/CMake/BuildUtils.cmake)
+include(../../BuildTools/CMake/VulkanUtils.cmake)
+
 project(Diligent-GraphicsEngineVk CXX)
 
 set(INCLUDE
@@ -49,15 +52,15 @@ set(INCLUDE
 
 set(VULKAN_UTILS_INCLUDE
     include/VulkanUtilities/RenderingInfoWrapper.hpp
-    include/VulkanUtilities/VulkanCommandBuffer.hpp
-    include/VulkanUtilities/VulkanCommandBufferPool.hpp
-    include/VulkanUtilities/VulkanDebug.hpp
-    include/VulkanUtilities/VulkanInstance.hpp
-    include/VulkanUtilities/VulkanLogicalDevice.hpp
-    include/VulkanUtilities/VulkanMemoryManager.hpp
-    include/VulkanUtilities/VulkanObjectWrappers.hpp
-    include/VulkanUtilities/VulkanPhysicalDevice.hpp
-    include/VulkanUtilities/VulkanSyncObjectManager.hpp
+    include/VulkanUtilities/CommandBuffer.hpp
+    include/VulkanUtilities/CommandBufferPool.hpp
+    include/VulkanUtilities/Debug.hpp
+    include/VulkanUtilities/Instance.hpp
+    include/VulkanUtilities/LogicalDevice.hpp
+    include/VulkanUtilities/MemoryManager.hpp
+    include/VulkanUtilities/ObjectWrappers.hpp
+    include/VulkanUtilities/PhysicalDevice.hpp
+    include/VulkanUtilities/SyncObjectManager.hpp
     include/VulkanUtilities/VulkanHeaders.h
 )
 
@@ -130,14 +133,14 @@ set(SRC
 
 set(VULKAN_UTILS_SRC
     src/VulkanUtilities/RenderingInfoWrapper.cpp
-    src/VulkanUtilities/VulkanCommandBuffer.cpp
-    src/VulkanUtilities/VulkanCommandBufferPool.cpp
-    src/VulkanUtilities/VulkanDebug.cpp
-    src/VulkanUtilities/VulkanInstance.cpp
-    src/VulkanUtilities/VulkanLogicalDevice.cpp
-    src/VulkanUtilities/VulkanMemoryManager.cpp
-    src/VulkanUtilities/VulkanPhysicalDevice.cpp
-    src/VulkanUtilities/VulkanSyncObjectManager.cpp
+    src/VulkanUtilities/CommandBuffer.cpp
+    src/VulkanUtilities/CommandBufferPool.cpp
+    src/VulkanUtilities/Debug.cpp
+    src/VulkanUtilities/Instance.cpp
+    src/VulkanUtilities/LogicalDevice.cpp
+    src/VulkanUtilities/MemoryManager.cpp
+    src/VulkanUtilities/PhysicalDevice.cpp
+    src/VulkanUtilities/SyncObjectManager.cpp
 )
 
 set(DLL_SOURCE
@@ -159,7 +162,7 @@ add_library(Diligent-GraphicsEngineVk-shared SHARED
     readme.md
 )
 
-if(MSVC)
+if((PLATFORM_WIN32 OR PLATFORM_UNIVERSAL_WINDOWS) AND NOT MINGW_BUILD)
     target_sources(Diligent-GraphicsEngineVk-shared PRIVATE ${DLL_SOURCE})
 endif()
 
@@ -248,9 +251,9 @@ else()
 endif()
 
 if(PLATFORM_WIN32)
-    list(APPEND PRIVATE_DEPENDENCIES volk::volk_headers)
+    list(APPEND PRIVATE_DEPENDENCIES volk::volk)
 elseif(PLATFORM_MACOS)
-    list(APPEND PRIVATE_DEPENDENCIES volk::volk_headers)
+    list(APPEND PRIVATE_DEPENDENCIES volk::volk)
 elseif(PLATFORM_IOS OR PLATFORM_TVOS)
     find_library(CORE_GRAPHICS CoreGraphics)
     find_library(METAL_LIBRARY Metal)
@@ -260,9 +263,9 @@ elseif(PLATFORM_IOS OR PLATFORM_TVOS)
     # Note that volk may be defined by external CMake, but we don't use it on iOS/tvOS
     list(APPEND PRIVATE_DEPENDENCIES ${MOLTENVK_LIBRARY} ${CORE_GRAPHICS} ${METAL_LIBRARY} ${QUARTZ_CORE} ${UI_KIT} ${IO_SURFACE})
 elseif(PLATFORM_LINUX)
-    list(APPEND PRIVATE_DEPENDENCIES volk::volk_headers)
+    list(APPEND PRIVATE_DEPENDENCIES volk::volk)
 elseif(PLATFORM_ANDROID)
-    list(APPEND PRIVATE_DEPENDENCIES volk::volk_headers)
+    list(APPEND PRIVATE_DEPENDENCIES volk::volk)
 else()
     find_library(Vulkan_LIBRARY NAMES vulkan)
     list(APPEND PRIVATE_DEPENDENCIES ${Vulkan_LIBRARY})
@@ -284,10 +287,11 @@ PUBLIC
 target_link_libraries(Diligent-GraphicsEngineVk-shared
 PRIVATE
     Diligent-BuildSettings
-    ${WHOLE_ARCHIVE_FLAG} Diligent-GraphicsEngineVk-static ${NO_WHOLE_ARCHIVE_FLAG}
 PUBLIC
     ${PUBLIC_DEPENDENCIES}
 )
+target_link_whole_archive(Diligent-GraphicsEngineVk-shared Diligent-GraphicsEngineVk-static)
+
 
 if (MINGW_BUILD)
     # Restrict export to GetEngineFactoryVk
@@ -299,18 +303,19 @@ if (MINGW_BUILD)
 endif()
 
 if(PLATFORM_WIN32)
-    set(PRIVATE_COMPILE_DEFINITIONS VK_USE_PLATFORM_WIN32_KHR=1 NOMINMAX DILIGENT_USE_VOLK=1)
+    set(PRIVATE_COMPILE_DEFINITIONS NOMINMAX DILIGENT_USE_VOLK=1)
 elseif(PLATFORM_LINUX)
-    set(PRIVATE_COMPILE_DEFINITIONS VK_USE_PLATFORM_XCB_KHR=1 VK_USE_PLATFORM_XLIB_KHR=1 DILIGENT_USE_VOLK=1)
+    set(PRIVATE_COMPILE_DEFINITIONS DILIGENT_USE_VOLK=1)
 elseif(PLATFORM_MACOS)
-    set(PRIVATE_COMPILE_DEFINITIONS VK_USE_PLATFORM_METAL_EXT=1 DILIGENT_USE_VOLK=1)
+    set(PRIVATE_COMPILE_DEFINITIONS DILIGENT_USE_VOLK=1)
 elseif(PLATFORM_IOS OR PLATFORM_TVOS)
-    set(PRIVATE_COMPILE_DEFINITIONS VK_USE_PLATFORM_METAL_EXT=1)
 elseif(PLATFORM_ANDROID)
-    set(PRIVATE_COMPILE_DEFINITIONS VK_USE_PLATFORM_ANDROID_KHR=1 DILIGENT_USE_VOLK=1)
+    set(PRIVATE_COMPILE_DEFINITIONS DILIGENT_USE_VOLK=1)
 else()
     message(FATAL_ERROR "Unknown platform")
 endif()
+get_vulkan_platform_definitions(VULKAN_PLATFORM_DEFINES)
+list(APPEND PRIVATE_COMPILE_DEFINITIONS ${VULKAN_PLATFORM_DEFINES})
 
 if (${DILIGENT_NO_GLSLANG})
     message("GLSLang is not being built. Vulkan backend will only be able to consume SPIRV byte code.")
@@ -326,7 +331,12 @@ PRIVATE
     DILIGENT_NO_GLSLANG=$<BOOL:${DILIGENT_NO_GLSLANG}>
     DILIGENT_NO_HLSL=$<BOOL:${DILIGENT_NO_HLSL}>
 )
-target_compile_definitions(Diligent-GraphicsEngineVk-shared PRIVATE ${PRIVATE_COMPILE_DEFINITIONS} ENGINE_DLL=1)
+target_compile_definitions(Diligent-GraphicsEngineVk-shared
+PUBLIC
+    DILIGENT_VK_SHARED=1
+PRIVATE
+    ${PRIVATE_COMPILE_DEFINITIONS}
+)
 
 if(PLATFORM_WIN32)
 

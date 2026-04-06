@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2022 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -147,19 +147,35 @@ public:
                           SHADER_TYPE           _ShaderStages,
                           SHADER_RESOURCE_TYPE  _ResourceType,
                           Uint32                _ArraySize,
-                          GLuint                _UBIndex)noexcept :
+                          GLuint                _UBIndex,
+                          Uint32                _BufferSize)noexcept :
             GLResourceAttribs{_Name, _ShaderStages, _ResourceType, PIPELINE_RESOURCE_FLAG_NONE, _ArraySize},
-            UBIndex          {_UBIndex}
+            UBIndex          {_UBIndex},
+            BufferSize       {_BufferSize}
         {}
 
         UniformBufferInfo(const UniformBufferInfo& UB,
                           StringPool&              NamesPool)noexcept :
             GLResourceAttribs{UB, NamesPool},
-            UBIndex          {UB.UBIndex   }
+            UBIndex          {UB.UBIndex   },
+            BufferSize       {UB.BufferSize}
         {}
         // clang-format on
 
+        Uint32 GetInlineConstantCountOrThrow() const noexcept(false)
+        {
+            const Uint32 NumConstants = BufferSize / sizeof(Uint32);
+            if (NumConstants > MAX_INLINE_CONSTANTS)
+            {
+                LOG_ERROR_AND_THROW("Inline constants resource '", Name, "' has ",
+                                    NumConstants, " constants. The maximum supported number of inline constants is ",
+                                    MAX_INLINE_CONSTANTS, '.');
+            }
+            return NumConstants;
+        }
+
         const GLuint UBIndex;
+        const Uint32 BufferSize; // Buffer size in bytes
     };
     static_assert((sizeof(UniformBufferInfo) % sizeof(void*)) == 0, "sizeof(UniformBufferInfo) must be multiple of sizeof(void*)");
 
@@ -372,35 +388,35 @@ public:
                 return true;
             else
             {
-                auto VarType = GetShaderVariableType(m_ShaderStages, Name, *pResourceLayout);
+                SHADER_RESOURCE_VARIABLE_TYPE VarType = GetShaderVariableType(m_ShaderStages, Name, *pResourceLayout);
                 return IsAllowedType(VarType, AllowedTypeBits);
             }
         };
 
         for (Uint32 ub = 0; ub < m_NumUniformBuffers; ++ub)
         {
-            const auto& UB = GetUniformBuffer(ub);
+            const UniformBufferInfo& UB = GetUniformBuffer(ub);
             if (CheckResourceType(UB.Name))
                 HandleUB(UB);
         }
 
         for (Uint32 s = 0; s < m_NumTextures; ++s)
         {
-            const auto& Sam = GetTexture(s);
+            const TextureInfo& Sam = GetTexture(s);
             if (CheckResourceType(Sam.Name))
                 HandleTexture(Sam);
         }
 
         for (Uint32 img = 0; img < m_NumImages; ++img)
         {
-            const auto& Img = GetImage(img);
+            const ImageInfo& Img = GetImage(img);
             if (CheckResourceType(Img.Name))
                 HandleImg(Img);
         }
 
         for (Uint32 sb = 0; sb < m_NumStorageBlocks; ++sb)
         {
-            const auto& SB = GetStorageBlock(sb);
+            const StorageBlockInfo& SB = GetStorageBlock(sb);
             if (CheckResourceType(SB.Name))
                 HandleSB(SB);
         }

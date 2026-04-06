@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2025 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -80,6 +80,8 @@ public:
         }
     }
 
+    using IObject::QueryInterface;
+
     virtual ReferenceCounterValueType DILIGENT_CALL_TYPE AddRef() override final
     {
         return m_RefCounters.AddStrongRef();
@@ -102,8 +104,8 @@ public:
 
     virtual void DILIGENT_CALL_TYPE CreateDataBlob(size_t InitialSize, const void* pData, IDataBlob** ppDataBlob) const override final
     {
-        if (auto pDataBlob = DataBlobImpl::Create(InitialSize, pData))
-            pDataBlob->QueryInterface(IID_DataBlob, reinterpret_cast<IObject**>(ppDataBlob));
+        if (RefCntAutoPtr<DataBlobImpl> pDataBlob = DataBlobImpl::Create(InitialSize, pData))
+            pDataBlob->QueryInterface(IID_DataBlob, ppDataBlob);
     }
 
     virtual void DILIGENT_CALL_TYPE CreateDefaultShaderSourceStreamFactory(const Char*                       SearchDirectories,
@@ -120,6 +122,11 @@ public:
     virtual void DILIGENT_CALL_TYPE SetBreakOnError(bool BreakOnError) const override final
     {
         PlatformDebug::SetBreakOnError(BreakOnError);
+    }
+
+    virtual void DILIGENT_CALL_TYPE SetMemoryAllocator(IMemoryAllocator* pAllocator) const override final
+    {
+        SetRawAllocator(pAllocator);
     }
 
 protected:

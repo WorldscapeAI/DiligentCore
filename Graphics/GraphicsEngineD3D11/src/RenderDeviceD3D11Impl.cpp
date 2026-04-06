@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2025 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -186,8 +186,6 @@ void RenderDeviceD3D11Impl::TestTextureFormat(TEXTURE_FORMAT TexFormat)
     }
 }
 
-IMPLEMENT_QUERY_INTERFACE(RenderDeviceD3D11Impl, IID_RenderDeviceD3D11, TRenderDeviceBase)
-
 void RenderDeviceD3D11Impl::CreateBufferFromD3DResource(ID3D11Buffer* pd3d11Buffer, const BufferDesc& BuffDesc, RESOURCE_STATE InitialState, IBuffer** ppBuffer)
 {
     CreateBufferImpl(ppBuffer, BuffDesc, InitialState, pd3d11Buffer);
@@ -226,7 +224,7 @@ void RenderDeviceD3D11Impl::CreateTexture1DFromD3DResource(ID3D11Texture1D* pd3d
                        [&]() //
                        {
                            TextureBaseD3D11* pTextureD3D11{NEW_RC_OBJ(m_TexObjAllocator, "Texture1D_D3D11 instance", Texture1D_D3D11)(m_TexViewObjAllocator, this, InitialState, pd3d11Texture)};
-                           pTextureD3D11->QueryInterface(IID_Texture, reinterpret_cast<IObject**>(ppTexture));
+                           pTextureD3D11->QueryInterface(IID_Texture, ppTexture);
                            pTextureD3D11->CreateDefaultViews();
                        });
 }
@@ -242,7 +240,7 @@ void RenderDeviceD3D11Impl::CreateTexture2DFromD3DResource(ID3D11Texture2D* pd3d
                        [&]() //
                        {
                            TextureBaseD3D11* pTextureD3D11{NEW_RC_OBJ(m_TexObjAllocator, "Texture2D_D3D11 instance", Texture2D_D3D11)(m_TexViewObjAllocator, this, InitialState, pd3d11Texture)};
-                           pTextureD3D11->QueryInterface(IID_Texture, reinterpret_cast<IObject**>(ppTexture));
+                           pTextureD3D11->QueryInterface(IID_Texture, ppTexture);
                            pTextureD3D11->CreateDefaultViews();
                        });
 }
@@ -258,7 +256,7 @@ void RenderDeviceD3D11Impl::CreateTexture3DFromD3DResource(ID3D11Texture3D* pd3d
                        [&]() //
                        {
                            TextureBaseD3D11* pTextureD3D11{NEW_RC_OBJ(m_TexObjAllocator, "Texture3D_D3D11 instance", Texture3D_D3D11)(m_TexViewObjAllocator, this, InitialState, pd3d11Texture)};
-                           pTextureD3D11->QueryInterface(IID_Texture, reinterpret_cast<IObject**>(ppTexture));
+                           pTextureD3D11->QueryInterface(IID_Texture, ppTexture);
                            pTextureD3D11->CreateDefaultViews();
                        });
 }
@@ -290,7 +288,7 @@ void RenderDeviceD3D11Impl::CreateTexture(const TextureDesc& TexDesc, const Text
 
                                default: LOG_ERROR_AND_THROW("Unknown texture type. (Did you forget to initialize the Type member of TextureDesc structure?)");
                            }
-                           pTextureD3D11->QueryInterface(IID_Texture, reinterpret_cast<IObject**>(ppTexture));
+                           pTextureD3D11->QueryInterface(IID_Texture, ppTexture);
                            pTextureD3D11->CreateDefaultViews();
                        });
 }
@@ -420,9 +418,10 @@ void RenderDeviceD3D11Impl::IdleGPU()
     }
 }
 
-SparseTextureFormatInfo RenderDeviceD3D11Impl::GetSparseTextureFormatInfo(TEXTURE_FORMAT     TexFormat,
-                                                                          RESOURCE_DIMENSION Dimension,
-                                                                          Uint32             SampleCount) const
+Bool RenderDeviceD3D11Impl::GetSparseTextureFormatInfo(TEXTURE_FORMAT           TexFormat,
+                                                       RESOURCE_DIMENSION       Dimension,
+                                                       Uint32                   SampleCount,
+                                                       SparseTextureFormatInfo& FormatInfo) const
 {
     D3D11_FEATURE_DATA_FORMAT_SUPPORT2 FormatSupport2{
         TexFormatToDXGI_Format(TexFormat), // .InFormat
@@ -430,10 +429,11 @@ SparseTextureFormatInfo RenderDeviceD3D11Impl::GetSparseTextureFormatInfo(TEXTUR
     if (FAILED(m_pd3d11Device->CheckFeatureSupport(D3D11_FEATURE_FORMAT_SUPPORT2, &FormatSupport2, sizeof(FormatSupport2))) ||
         (FormatSupport2.OutFormatSupport2 & D3D11_FORMAT_SUPPORT2_TILED) != D3D11_FORMAT_SUPPORT2_TILED)
     {
-        return {};
+        FormatInfo = {};
+        return false;
     }
 
-    return TRenderDeviceBase::GetSparseTextureFormatInfo(TexFormat, Dimension, SampleCount);
+    return TRenderDeviceBase::GetSparseTextureFormatInfo(TexFormat, Dimension, SampleCount, FormatInfo);
 }
 
 } // namespace Diligent

@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2022 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -62,16 +62,13 @@ public:
 
     ~BufferD3D11Impl();
 
-    virtual void DILIGENT_CALL_TYPE QueryInterface(const INTERFACE_ID& IID, IObject** ppInterface) override final;
+    IMPLEMENT_QUERY_INTERFACE_IN_PLACE(IID_BufferD3D11, TBufferBase)
 
     /// Implementation of IBufferD3D11::GetD3D11Buffer().
     virtual ID3D11Buffer* DILIGENT_CALL_TYPE GetD3D11Buffer() const override final { return m_pd3d11Buffer; }
 
     /// Implementation of IBuffer::GetNativeHandle().
     virtual Uint64 DILIGENT_CALL_TYPE GetNativeHandle() override final { return BitCast<Uint64>(GetD3D11Buffer()); }
-
-    /// Implementation of IBuffer::GetSparseProperties().
-    virtual SparseBufferProperties DILIGENT_CALL_TYPE GetSparseProperties() const override final;
 
     void AddState(RESOURCE_STATE State)
     {
@@ -93,6 +90,9 @@ private:
     void CreateUAV(struct BufferViewDesc& UAVDesc, ID3D11UnorderedAccessView** ppD3D11UAV);
     void CreateSRV(struct BufferViewDesc& SRVDesc, ID3D11ShaderResourceView** ppD3D11SRV);
 
+    void InitSparseProperties();
+
+private:
     friend class DeviceContextD3D11Impl;
     CComPtr<ID3D11Buffer> m_pd3d11Buffer; ///< D3D11 buffer object
 };

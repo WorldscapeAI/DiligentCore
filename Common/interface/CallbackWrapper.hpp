@@ -27,6 +27,8 @@
 /// \file
 /// Defines CallbackWrapper class that wraps a callback function
 
+#pragma once
+
 #include <utility>
 
 namespace Diligent
@@ -43,7 +45,7 @@ struct CallbackWrapper
         {
             [](ArgsType... Args, void* pData) //
             {
-                auto* pCallback = reinterpret_cast<CallbackType*>(pData);
+                CallbackType* pCallback = reinterpret_cast<CallbackType*>(pData);
                 return (*pCallback)(std::forward<ArgsType>(Args)...);
             } //
         }
@@ -82,7 +84,7 @@ struct FunctionTraits<ReturnType (ClassType::*)(ArgsType...) const>
 /// Example:
 ///
 ///     auto ModifyPipelineCI = MakeCallback([&](PipelineStateCreateInfo* pPipelineCI) {
-///         auto* pGraphicsPipelineCI                              = static_cast<GraphicsPipelineStateCreateInfo*>(pPipelineCI);
+///         GraphicsPipelineStateCreateInfo* pGraphicsPipelineCI   = static_cast<GraphicsPipelineStateCreateInfo*>(pPipelineCI);
 ///         pGraphicsPipelineCI->GraphicsPipeline.RTVFormats[0]    = m_pSwapChain->GetDesc().ColorBufferFormat;
 ///         pGraphicsPipelineCI->GraphicsPipeline.DSVFormat        = m_pSwapChain->GetDesc().DepthBufferFormat;
 ///         pGraphicsPipelineCI->GraphicsPipeline.NumRenderTargets = 1;

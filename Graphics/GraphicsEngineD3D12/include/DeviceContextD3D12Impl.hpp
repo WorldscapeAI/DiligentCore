@@ -308,12 +308,17 @@ public:
                             Uint64                         NumBytes,
                             RESOURCE_STATE_TRANSITION_MODE StateTransitionMode);
 
+    struct SubresCopyMapping
+    {
+        Uint32 Src = 0;
+        Uint32 Dst = 0;
+    };
     void CopyTextureRegion(class TextureD3D12Impl*        pSrcTexture,
-                           Uint32                         SrcSubResIndex,
                            const D3D12_BOX*               pD3D12SrcBox,
                            RESOURCE_STATE_TRANSITION_MODE SrcTextureTransitionMode,
                            class TextureD3D12Impl*        pDstTexture,
-                           Uint32                         DstSubResIndex,
+                           const SubresCopyMapping*       Planes,
+                           Uint32                         NumPlanes,
                            Uint32                         DstX,
                            Uint32                         DstY,
                            Uint32                         DstZ,
@@ -421,7 +426,11 @@ private:
     __forceinline RootTableInfo& GetRootTableInfo(PIPELINE_TYPE PipelineType);
 
     template <bool IsCompute>
-    __forceinline void CommitRootTablesAndViews(RootTableInfo& RootInfo, Uint32 CommitSRBMask, CommandContext& CmdCtx) const;
+    __forceinline void CommitRootTablesAndViews(RootTableInfo&  RootInfo,
+                                                Uint32          CommitSRBMask,
+                                                CommandContext& CmdCtx,
+                                                bool            DynamicBuffersIntact  = false,
+                                                bool            InlineConstantsIntact = false) const;
 
 #ifdef DILIGENT_DEVELOPMENT
     void DvpValidateCommittedShaderResources(RootTableInfo& RootInfo) const;

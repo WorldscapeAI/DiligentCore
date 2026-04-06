@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2024 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -81,11 +81,12 @@ class ShaderVariableManagerD3D11;
 
 struct PipelineResourceAttribsD3D11;
 struct ImmutableSamplerAttribsD3D11;
+struct InlineConstantBufferAttribsD3D11;
 struct PipelineResourceSignatureInternalDataD3D11;
 
 struct EngineD3D11ImplTraits
 {
-    static constexpr auto DeviceType = RENDER_DEVICE_TYPE_D3D11;
+    static constexpr RENDER_DEVICE_TYPE DeviceType = RENDER_DEVICE_TYPE_D3D11;
 
     using RenderDeviceInterface              = IRenderDeviceD3D11;
     using DeviceContextInterface             = IDeviceContextD3D11;
@@ -136,7 +137,10 @@ struct EngineD3D11ImplTraits
 
     using PipelineResourceAttribsType               = PipelineResourceAttribsD3D11;
     using ImmutableSamplerAttribsType               = ImmutableSamplerAttribsD3D11;
+    using InlineConstantBufferAttribsType           = InlineConstantBufferAttribsD3D11;
     using PipelineResourceSignatureInternalDataType = PipelineResourceSignatureInternalDataD3D11;
+
+    using LocalRootSignatureType = void;
 };
 
 } // namespace Diligent

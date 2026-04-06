@@ -1,10 +1,11 @@
 # Diligent Core [![Tweet](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/intent/tweet?text=An%20easy-to-use%20cross-platform%20graphics%20library%20that%20takes%20full%20advantage%20of%20%23Direct3D12%20and%20%23VulkanAPI&url=https://github.com/DiligentGraphics/DiligentEngine) <img src="media/diligentgraphics-logo.png" height=64 align="right" valign="middle">
 
-Diligent Core is a modern cross-platfrom low-level graphics API that makes the foundation of the [Diligent Engine](https://github.com/DiligentGraphics/DiligentEngine).
-The module implements Direct3D11, Direct3D12, OpenGL, OpenGLES, and Vulkan rendering backends (Metal implementation is available for commercial clients),
-as well as basic platform-specific utilities. It is self-contained and can be built by its own.
-Please refer to the [main repository](https://github.com/DiligentGraphics/DiligentEngine) for information about the supported platforms and features,
-build instructions, etc.
+Diligent Core is a modern, cross-platform low-level graphics API that forms the foundation of [Diligent Engine](https://github.com/DiligentGraphics/DiligentEngine).
+It provides implementations for Direct3D11, Direct3D12, OpenGL, OpenGLES, Vulkan, and WebGPU rendering backends.
+A Metal backend is also available for commercial clients. In addition, the module includes essential platform-specific utilities.
+Diligent Core is fully self-contained and can be built independently of the rest of the engine.
+For details on supported platforms, features, and build instructions, please refer to the 
+[main repository](https://github.com/DiligentGraphics/DiligentEngine).
 
 | Platform             | Build Status  |
 | ---------------------| ------------- |
@@ -18,12 +19,13 @@ build instructions, etc.
 |<img src="media/emscripten-logo.png" width=24 valign="middle"> Web              | [![Build Status](https://github.com/DiligentGraphics/DiligentCore/actions/workflows/build-emscripten.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentCore/actions/workflows/build-emscripten.yml?query=branch%3Amaster) | 
 
 
+[![Documentation](https://img.shields.io/badge/Documentation-online-0072B1?logo=readthedocs&logoColor=white)](https://diligentgraphics.github.io/docs)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](License.txt)
 [![Chat on Discord](https://img.shields.io/discord/730091778081947680?logo=discord)](https://discord.gg/t7HGBK7)
-[![Appveyor Build Status](https://ci.appveyor.com/api/projects/status/github/DiligentGraphics/DiligentCore?svg=true)](https://ci.appveyor.com/project/DiligentGraphics/diligentcore)
+[![Lines of code](https://sloc.xyz/github/DiligentGraphics/DiligentCore)](https://github.com/DiligentGraphics/DiligentCore)
+[![Appveyor Build Status](https://img.shields.io/appveyor/build/DiligentGraphics/diligentcore/master?logo=appveyor)](https://ci.appveyor.com/project/DiligentGraphics/diligentcore)
 [![CodeQL Scanning](https://github.com/DiligentGraphics/DiligentCore/actions/workflows/codeql.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentCore/actions/workflows/codeql.yml?query=branch%3Amaster)
 [![MSVC Analysis](https://github.com/DiligentGraphics/DiligentCore/actions/workflows/msvc_analysis.yml/badge.svg?branch=master)](https://github.com/DiligentGraphics/DiligentCore/actions/workflows/msvc_analysis.yml?query=branch%3Amaster)
-[![Lines of code](https://sloc.xyz/github/DiligentGraphics/DiligentCore)](https://github.com/DiligentGraphics/DiligentCore)
 
 
 # Table of Contents
@@ -89,11 +91,8 @@ void InitializeDiligentEngine(HWND NativeWindowHandle)
         case RENDER_DEVICE_TYPE_D3D11:
         {
             EngineD3D11CreateInfo EngineCI;
-#    if ENGINE_DLL
-            // Load the dll and import GetEngineFactoryD3D11() function
-            auto* GetEngineFactoryD3D11 = LoadGraphicsEngineD3D11();
-#    endif
-            auto* pFactoryD3D11 = GetEngineFactoryD3D11();
+            // Load the dll and get the factory
+            auto* pFactoryD3D11 = LoadAndGetEngineFactoryD3D11();
             pFactoryD3D11->CreateDeviceAndContextsD3D11(EngineCI, &m_pDevice, &m_pImmediateContext);
             Win32NativeWindow Window{hWnd};
             pFactoryD3D11->CreateSwapChainD3D11(m_pDevice, m_pImmediateContext, SCDesc,
@@ -103,13 +102,9 @@ void InitializeDiligentEngine(HWND NativeWindowHandle)
 
         case RENDER_DEVICE_TYPE_D3D12:
         {
-#    if ENGINE_DLL
-            // Load the dll and import GetEngineFactoryD3D12() function
-            auto GetEngineFactoryD3D12 = LoadGraphicsEngineD3D12();
-#    endif
             EngineD3D12CreateInfo EngineCI;
-
-            auto* pFactoryD3D12 = GetEngineFactoryD3D12();
+            // Load the dll and get the factory
+            auto* pFactoryD3D12 = LoadAndGetEngineFactoryD3D12();
             pFactoryD3D12->CreateDeviceAndContextsD3D12(EngineCI, &m_pDevice, &m_pImmediateContext);
             Win32NativeWindow Window{hWnd};
             pFactoryD3D12->CreateSwapChainD3D12(m_pDevice, m_pImmediateContext, SCDesc,
@@ -119,11 +114,8 @@ void InitializeDiligentEngine(HWND NativeWindowHandle)
 
     case RENDER_DEVICE_TYPE_GL:
     {
-#    if EXPLICITLY_LOAD_ENGINE_GL_DLL
-        // Load the dll and import GetEngineFactoryOpenGL() function
-        auto GetEngineFactoryOpenGL = LoadGraphicsEngineOpenGL();
-#    endif
-        auto* pFactoryOpenGL = GetEngineFactoryOpenGL();
+        // Load the dll and get the factory
+        auto* pFactoryOpenGL = LoadAndGetEngineFactoryOpenGL();
 
         EngineGLCreateInfo EngineCI;
         EngineCI.Window.hWnd = hWnd;
@@ -135,13 +127,9 @@ void InitializeDiligentEngine(HWND NativeWindowHandle)
 
     case RENDER_DEVICE_TYPE_VULKAN:
     {
-#    if EXPLICITLY_LOAD_ENGINE_VK_DLL
-        // Load the dll and import GetEngineFactoryVk() function
-        auto GetEngineFactoryVk = LoadGraphicsEngineVk();
-#    endif
         EngineVkCreateInfo EngineCI;
-
-        auto* pFactoryVk = GetEngineFactoryVk();
+        // Load the dll and get the factory
+        auto* pFactoryVk = LoadAndGetEngineFactoryVk();
         pFactoryVk->CreateDeviceAndContextsVk(EngineCI, &m_pDevice, &m_pImmediateContext);
         Win32NativeWindow Window{hWnd};
         pFactoryVk->CreateSwapChainVk(m_pDevice, m_pImmediateContext, SCDesc, Window, &m_pSwapChain);

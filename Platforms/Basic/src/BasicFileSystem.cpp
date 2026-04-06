@@ -227,60 +227,114 @@ std::string BasicFileSystem::BuildPathFromComponents(const std::vector<String>& 
 
 std::string BasicFileSystem::SimplifyPath(const Char* Path, Char Slash)
 {
-    if (Path == nullptr)
+    if (Path == nullptr || Path[0] == '\0')
         return "";
 
-    if (Slash != 0)
-        DEV_CHECK_ERR(IsSlash(Slash), "Incorrect slash symbol");
-    else
-        Slash = SlashSymbol;
-
-    struct MiniStringView
-    {
-        MiniStringView(const char* _Start,
-                       const char* _End) :
-            Start{_Start},
-            End{_End}
-        {}
-
-        bool operator==(const char* Str) const noexcept
-        {
-            const auto Len = End - Start;
-            return strncmp(Str, Start, Len) == 0 && Str[Len] == '\0';
-        }
-
-        bool operator!=(const char* str) const noexcept
-        {
-            return !(*this == str);
-        }
-
-        const char* const Start;
-        const char* const End;
-    };
-
-    const auto PathComponents  = Diligent::SplitPath<MiniStringView>(Path, true);
-    const auto NumComponents   = PathComponents.size();
-    const auto UseLeadingSlash = Slash == '/' && IsSlash(Path[0]);
-
-    size_t Len = UseLeadingSlash ? 1 : 0;
-    for (const auto& Cmp : PathComponents)
-        Len += Cmp.End - Cmp.Start;
-    if (NumComponents > 0)
-        Len += NumComponents - 1;
+    DEV_CHECK_ERR(Slash == 0 || IsSlash(Slash), "Incorrect slash symbol");
+    Slash = IsSlash(Slash) ? Slash : SlashSymbol;
 
     std::string SimplifiedPath;
-    SimplifiedPath.reserve(Len);
-    if (UseLeadingSlash)
-        SimplifiedPath.push_back(Slash);
+    SimplifiedPath.reserve(std::strlen(Path));
+    const char* c = Path;
 
-    for (size_t i = 0; i < NumComponents; ++i)
+    if (Slash == WinSlash)
     {
-        if (i > 0)
-            SimplifiedPath.push_back(Slash);
-        const auto& Cmp = PathComponents[i];
-        SimplifiedPath.append(Cmp.Start, Cmp.End);
+        // Windows path
+        if (c[1] == ':')
+        {
+            // Windows drive letter (e.g., C:)
+            SimplifiedPath.push_back(*(c++)); // Drive letter
+            SimplifiedPath.push_back(*(c++)); // ':'
+        }
+        else if (IsSlash(c[0]) && IsSlash(c[1]))
+        {
+            // Windows UNC path (e.g., \\Server\Share)
+            SimplifiedPath.push_back(Slash); // First '\'
+            SimplifiedPath.push_back(Slash); // Second '\'
+            c += 2;
+            // Copy server name
+            while (*c != '\0' && !IsSlash(*c))
+                SimplifiedPath.push_back(*(c++));
+        }
     }
-    VERIFY_EXPR(SimplifiedPath.length() == Len);
+    else
+    {
+        // Unix path
+        VERIFY_EXPR(Slash == UnixSlash);
+        if (IsSlash(*c))
+        {
+            // Unix absolute path (e.g., /home/user)
+            SimplifiedPath.push_back(Slash);
+            ++c;
+        }
+    }
+
+    const size_t RootLen = SimplifiedPath.length();
+
+    Uint32 NumLeadingDirUps = 0;
+    while (*c != '\0')
+    {
+        // Skip leading slashes
+        while (IsSlash(*c))
+            ++c;
+
+        // Handle . and ..
+        if (*c == '.')
+        {
+            if ((IsSlash(c[1]) || c[1] == '\0'))
+            {
+                // Skip /.
+                c += (c[1] != '\0') ? 2 : 1;
+                continue;
+            }
+
+            if (c[1] == '.' && (IsSlash(c[2]) || c[2] == '\0'))
+            {
+                // Handle /..
+                c += (c[2] != '\0') ? 3 : 2;
+                // Pop previous subdirectory unless it is a root
+                if (SimplifiedPath.length() > RootLen)
+                {
+                    size_t PrevSlashPos = SimplifiedPath.length() - 1;
+                    while (PrevSlashPos > RootLen && !IsSlash(SimplifiedPath[PrevSlashPos]))
+                        --PrevSlashPos;
+                    SimplifiedPath.resize(PrevSlashPos);
+                }
+                else if (RootLen == 0)
+                {
+                    // Relative path - count leading ../
+                    ++NumLeadingDirUps;
+                }
+                continue;
+            }
+        }
+
+        if (*c == '\0')
+            break;
+
+        if (!SimplifiedPath.empty() && !IsSlash(SimplifiedPath.back()))
+        {
+            SimplifiedPath.push_back(Slash);
+        }
+
+        // Copy regular path component
+        const char* CmpEnd = c;
+        while (*CmpEnd != '\0' && !IsSlash(*CmpEnd))
+            ++CmpEnd;
+
+        SimplifiedPath.append(c, CmpEnd);
+        c = CmpEnd;
+    }
+
+    if (NumLeadingDirUps > 0)
+    {
+        const bool IsPathEmpty = SimplifiedPath.empty();
+        SimplifiedPath.insert(0, NumLeadingDirUps * 3 - (IsPathEmpty ? 1 : 0), '.');
+        for (Uint32 i = 0; i < NumLeadingDirUps - (IsPathEmpty ? 1 : 0); ++i)
+        {
+            SimplifiedPath[i * 3 + 2] = Slash;
+        }
+    }
 
     return SimplifiedPath;
 }
@@ -289,10 +343,15 @@ std::string BasicFileSystem::SimplifyPath(const Char* Path, Char Slash)
 std::string BasicFileSystem::GetRelativePath(const Char* PathFrom,
                                              bool        IsFromDirectory,
                                              const Char* PathTo,
-                                             bool /*IsToDirectory*/)
+                                             bool /*IsToDirectory*/,
+                                             Char Slash)
 {
     DEV_CHECK_ERR(PathFrom != nullptr, "Source path must not be null");
     DEV_CHECK_ERR(PathTo != nullptr, "Destination path must not be null");
+    if (Slash != 0)
+        DEV_CHECK_ERR(IsSlash(Slash), "Incorrect slash symbol");
+    else
+        Slash = SlashSymbol;
 
     const auto FromPathComps = SplitPath(PathFrom, true);
     const auto ToPathComps   = SplitPath(PathTo, true);
@@ -321,7 +380,7 @@ std::string BasicFileSystem::GetRelativePath(const Char* PathFrom,
         }
 
         if (!RelPath.empty())
-            RelPath.push_back(SlashSymbol);
+            RelPath.push_back(Slash);
         RelPath.append("..");
     }
 
@@ -329,13 +388,64 @@ std::string BasicFileSystem::GetRelativePath(const Char* PathFrom,
     {
         // IsToDirectory is in fact irrelevant
         if (!RelPath.empty())
-            RelPath.push_back(SlashSymbol);
+            RelPath.push_back(Slash);
         RelPath.append(*to_it);
     }
 
     return RelPath;
 }
 
+void BasicFileSystem::GetCommonPathPrefix(const char* Path1,
+                                          const char* Path2,
+                                          size_t&     Prefix1Len,
+                                          size_t&     Prefix2Len)
+{
+    Prefix1Len = 0;
+    Prefix2Len = 0;
+
+    if (Path1 == nullptr || Path2 == nullptr)
+    {
+        DEV_ERROR("Paths must not be null");
+        return;
+    }
+
+    if (Path1[0] == '\0' || Path2[0] == '\0')
+        return;
+
+    if (IsSlash(Path1[0]) != IsSlash(Path2[0]))
+        return;
+
+    while (Path1[Prefix1Len] != '\0' && Path2[Prefix2Len] != '\0')
+    {
+        // Skip leading slashes
+        while (IsSlash(Path1[Prefix1Len]))
+            ++Prefix1Len;
+        while (IsSlash(Path2[Prefix2Len]))
+            ++Prefix2Len;
+
+        if (Path1[Prefix1Len] == '\0' || Path2[Prefix2Len] == '\0')
+            break;
+
+        size_t i = Prefix1Len;
+        size_t j = Prefix2Len;
+        while (Path1[i] != '\0' && !IsSlash(Path1[i]) &&
+               Path2[j] != '\0' && !IsSlash(Path2[j]) &&
+               Path1[i] == Path2[j])
+        {
+            ++i;
+            ++j;
+        }
+
+        if ((Path1[i] != '\0' && !IsSlash(Path1[i])) ||
+            (Path2[j] != '\0' && !IsSlash(Path2[j])))
+        {
+            break;
+        }
+
+        Prefix1Len = i;
+        Prefix2Len = j;
+    }
+}
 
 std::string BasicFileSystem::FileDialog(const FileDialogAttribs& DialogAttribs)
 {

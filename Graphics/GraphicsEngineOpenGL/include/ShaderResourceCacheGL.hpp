@@ -1,5 +1,5 @@
 /*
- *  Copyright 2019-2022 Diligent Graphics LLC
+ *  Copyright 2019-2026 Diligent Graphics LLC
  *  Copyright 2015-2019 Egor Yusov
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,10 +40,10 @@ namespace Diligent
 
 // All resources are stored in the continuous memory using the following layout:
 //
-//   |        Cached UBs        |     Cached Textures     |       Cached Images      | Cached Storage Blocks     |
-//   |----------------------------------------------------|--------------------------|---------------------------|
-//   |  0 | 1 | ... | UBCount-1 | 0 | 1 | ...| SmpCount-1 | 0 | 1 | ... | ImgCount-1 | 0 | 1 |  ... | SBOCount-1 |
-//    -----------------------------------------------------------------------------------------------------------
+//   |        Cached UBs        |     Cached Textures     |       Cached Images      | Cached Storage Blocks     | Inline Constant Data    |
+//   |----------------------------------------------------|--------------------------|---------------------------|-------------------------|
+//   |  0 | 1 | ... | UBCount-1 | 0 | 1 | ...| SmpCount-1 | 0 | 1 | ... | ImgCount-1 | 0 | 1 |  ... | SBOCount-1 | Uint32[] (tail)         |
+//    --------------------------------------------------------------------------------------------------------------------------------------
 //
 class ShaderResourceCacheGL : public ShaderResourceCacheBase
 {
@@ -71,12 +71,26 @@ public:
         Uint32 RangeSize     = 0;
         Uint32 DynamicOffset = 0;
 
+        // Pointer to inline constant data
+        void* pInlineConstantData = nullptr;
+
         // In OpenGL dynamic buffers are only those that are not bound as a whole and
         // can use a dynamic offset, irrespective of the variable type or whether the
         // buffer is USAGE_DYNAMIC or not.
         bool IsDynamic() const
         {
             return pBuffer && RangeSize < pBuffer->GetDesc().Size;
+        }
+
+        void SetInlineConstants(const void* pSrcConstants, Uint32 FirstConstant, Uint32 NumConstants)
+        {
+            VERIFY(pSrcConstants != nullptr, "Source constant data pointer is null");
+            VERIFY(FirstConstant + NumConstants <= RangeSize / sizeof(Uint32),
+                   "Too many constants (", FirstConstant + NumConstants, ") for the allocated space (", RangeSize / sizeof(Uint32), ")");
+            VERIFY(pInlineConstantData != nullptr, "Inline constant data pointer is null");
+            memcpy(reinterpret_cast<Uint8*>(pInlineConstantData) + FirstConstant * sizeof(Uint32),
+                   pSrcConstants,
+                   NumConstants * sizeof(Uint32));
         }
     };
 
@@ -133,7 +147,7 @@ public:
         {
             if (pBufferView)
             {
-                const auto* pBuff = pBufferView->GetBuffer<const BufferGLImpl>();
+                const BufferGLImpl* pBuff = pBufferView->GetBuffer<const BufferGLImpl>();
                 return pBufferView->GetDesc().ByteWidth < pBuff->GetDesc().Size;
             }
 
@@ -142,9 +156,22 @@ public:
     };
 
     using TResourceCount = std::array<Uint16, 4>; // same as PipelineResourceSignatureGLImpl::TBindings.
-    static size_t GetRequiredMemorySize(const TResourceCount& ResCount);
+    static size_t GetRequiredMemorySize(const TResourceCount& ResCount, Uint32 TotalInlineConstants = 0);
 
-    void Initialize(const TResourceCount& Count, IMemoryAllocator& MemAllocator, Uint64 DynamicUBOSlotMask, Uint64 DynamicSSBOSlotMask);
+    struct InitAttribs
+    {
+        const TResourceCount&          ResCount;
+        IMemoryAllocator&              MemAllocator;
+        InlineConstantBufferAttribsGL* pInlineConstantBuffers   = nullptr;
+        Uint32                         NumInlineConstantBuffers = 0;
+        Uint64                         DynamicUBOSlotMask       = 0;
+        Uint64                         DynamicSSBOSlotMask      = 0;
+
+#ifdef DILIGENT_DEBUG
+        Uint32 DbgTotalInlineConstants = 0;
+#endif
+    };
+    void Initialize(const InitAttribs& Attribs);
 
     void SetUniformBuffer(Uint32 CacheOffset, RefCntAutoPtr<BufferGLImpl>&& pBuff, Uint64 BaseOffset, Uint64 RangeSize)
     {
@@ -155,7 +182,7 @@ public:
                 RangeSize = pBuff->GetDesc().Size - BaseOffset;
         }
 
-        auto& UB = GetUB(CacheOffset);
+        CachedUB& UB = GetUB(CacheOffset);
 
         UB.pBuffer       = std::move(pBuff);
         UB.BaseOffset    = StaticCast<Uint32>(BaseOffset);
@@ -217,7 +244,7 @@ public:
 
     void SetSSBO(Uint32 CacheOffset, RefCntAutoPtr<BufferViewGLImpl>&& pBuffView)
     {
-        auto& SSBO = GetSSBO(CacheOffset);
+        CachedSSBO& SSBO = GetSSBO(CacheOffset);
 
         SSBO.pBufferView   = std::move(pBuffView);
         SSBO.DynamicOffset = 0;
@@ -251,7 +278,7 @@ public:
         if (CacheOffset >= GetUBCount())
             return false;
 
-        const auto& UB = GetConstUB(CacheOffset);
+        const CachedUB& UB = GetConstUB(CacheOffset);
         return UB.pBuffer;
     }
 
@@ -260,7 +287,7 @@ public:
         if (CacheOffset >= GetTextureCount())
             return false;
 
-        const auto& Texture = GetConstTexture(CacheOffset);
+        const CachedResourceView& Texture = GetConstTexture(CacheOffset);
         VERIFY_EXPR(dbgIsTextureView || Texture.pTexture == nullptr);
         return Texture.pView;
     }
@@ -270,7 +297,7 @@ public:
         if (CacheOffset >= GetImageCount())
             return false;
 
-        const auto& Image = GetConstImage(CacheOffset);
+        const CachedResourceView& Image = GetConstImage(CacheOffset);
         VERIFY_EXPR(dbgIsTextureView || Image.pTexture == nullptr);
         return Image.pView;
     }
@@ -280,15 +307,15 @@ public:
         if (CacheOffset >= GetSSBOCount())
             return false;
 
-        const auto& SSBO = GetConstSSBO(CacheOffset);
+        const CachedSSBO& SSBO = GetConstSSBO(CacheOffset);
         return SSBO.pBufferView;
     }
 
     // clang-format off
-    Uint32 GetUBCount()      const { return (m_TexturesOffset  - m_UBsOffset)      / sizeof(CachedUB);            }
-    Uint32 GetTextureCount() const { return (m_ImagesOffset    - m_TexturesOffset) / sizeof(CachedResourceView);  }
-    Uint32 GetImageCount()   const { return (m_SSBOsOffset     - m_ImagesOffset)   / sizeof(CachedResourceView);  }
-    Uint32 GetSSBOCount()    const { return (m_MemoryEndOffset - m_SSBOsOffset)    / sizeof(CachedSSBO);          }
+    Uint32 GetUBCount()      const { return (m_TexturesOffset       - m_UBsOffset)      / sizeof(CachedUB);            }
+    Uint32 GetTextureCount() const { return (m_ImagesOffset         - m_TexturesOffset) / sizeof(CachedResourceView);  }
+    Uint32 GetImageCount()   const { return (m_SSBOsOffset          - m_ImagesOffset)   / sizeof(CachedResourceView);  }
+    Uint32 GetSSBOCount()    const { return (m_InlineConstantOffset - m_SSBOsOffset)    / sizeof(CachedSSBO);          }
     // clang-format on
 
     const CachedUB& GetConstUB(Uint32 CacheOffset) const
@@ -317,7 +344,11 @@ public:
 
     bool IsInitialized() const
     {
-        return m_MemoryEndOffset != InvalidResourceOffset;
+        const bool Initialized = (m_TexturesOffset != InvalidResourceOffset);
+        VERIFY_EXPR(Initialized == (m_ImagesOffset != InvalidResourceOffset) &&
+                    Initialized == (m_SSBOsOffset != InvalidResourceOffset) &&
+                    Initialized == (m_InlineConstantOffset != InvalidResourceOffset));
+        return Initialized;
     }
 
     ResourceCacheContentType GetContentType() const { return m_ContentType; }
@@ -344,6 +375,29 @@ public:
     {
         return m_DynamicUBOMask != 0 || m_DynamicSSBOMask != 0;
     }
+
+    bool HasInlineConstants() const
+    {
+        return m_HasInlineConstants;
+    }
+
+    void SetInlineConstants(Uint32      CacheOffset,
+                            const void* pConstants,
+                            Uint32      FirstConstant,
+                            Uint32      NumConstants)
+    {
+        VERIFY(CacheOffset < GetUBCount(), "Cache offset is out of range");
+        CachedUB& UB = GetUB(CacheOffset);
+        UB.SetInlineConstants(pConstants, FirstConstant, NumConstants);
+        // NOTE: Do NOT call UpdateRevision() here.
+        // Inline constants are allowed to change after SRB commit without re-committing.
+        // The InlineConstantsSRBMask and InlineConstantsIntact flag handle the update logic.
+        // This is consistent with D3D11 and Vulkan implementations.
+    }
+
+    void CopyInlineConstants(const ShaderResourceCacheGL& SrcCache,
+                             Uint32                       CacheOffset,
+                             Uint32                       NumConstants);
 
 #ifdef DILIGENT_DEBUG
     void DbgVerifyDynamicBufferMasks() const;
@@ -374,10 +428,10 @@ private:
     static constexpr const Uint16 InvalidResourceOffset = 0xFFFF;
     static constexpr const Uint16 m_UBsOffset           = 0;
 
-    Uint16 m_TexturesOffset  = InvalidResourceOffset;
-    Uint16 m_ImagesOffset    = InvalidResourceOffset;
-    Uint16 m_SSBOsOffset     = InvalidResourceOffset;
-    Uint16 m_MemoryEndOffset = InvalidResourceOffset;
+    Uint16 m_TexturesOffset       = InvalidResourceOffset;
+    Uint16 m_ImagesOffset         = InvalidResourceOffset;
+    Uint16 m_SSBOsOffset          = InvalidResourceOffset;
+    Uint16 m_InlineConstantOffset = InvalidResourceOffset;
 
     std::unique_ptr<Uint8, STDDeleter<Uint8, IMemoryAllocator>> m_pResourceData;
 
@@ -391,6 +445,9 @@ private:
 
     // Indicates what types of resources are stored in the cache
     const ResourceCacheContentType m_ContentType;
+
+    // Indicates whether this cache has inline constants
+    bool m_HasInlineConstants = false;
 
 #ifdef DILIGENT_DEVELOPMENT
     bool m_bStaticResourcesInitialized = false;

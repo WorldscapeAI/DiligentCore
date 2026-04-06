@@ -35,6 +35,11 @@ if(NOT ARCHIVER_SUPPORTED)
     list(REMOVE_ITEM SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/RenderStateCacheTest.cpp)
 endif()
 
+if(NOT SUPER_RESOLUTION_SUPPORTED)
+    list(REMOVE_ITEM SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/SuperResolutionTest.cpp)
+    list(REMOVE_ITEM SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/c_interface/SuperResolution_C_Test.c)
+endif()
+
 if(D3D11_SUPPORTED)
     file(GLOB D3D11_SOURCE LIST_DIRECTORIES false src/D3D11/*)
     file(GLOB D3D11_INCLUDE LIST_DIRECTORIES false include/D3D11/*)
@@ -54,6 +59,12 @@ if(VULKAN_SUPPORTED)
     file(GLOB VK_INCLUDE LIST_DIRECTORIES false include/Vulkan/*)
     list(APPEND INCLUDE ${VK_INCLUDE})
     list(APPEND SOURCE ${VK_SOURCE})
+endif()
+
+if(NOT VULKAN_SUPPORTED OR NOT ${DILIGENT_USE_SPIRV_TOOLCHAIN} OR ${DILIGENT_NO_GLSLANG})
+    list(REMOVE_ITEM SOURCE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/Vulkan/ConvertUBOToPushConstantsTestVk.cpp
+    )
 endif()
 
 if(METAL_SUPPORTED)
@@ -108,6 +119,17 @@ PRIVATE
     Diligent-ShaderTools
 )
 
+if(SUPER_RESOLUTION_SUPPORTED)
+    target_link_libraries(DiligentCoreAPITest PRIVATE Diligent-SuperResolution-static)
+    if(DILIGENT_DSR_SUPPORTED)
+        target_link_libraries(DiligentCoreAPITest PRIVATE DirectSR-AgilitySDK)
+        copy_directsr_dlls(DiligentCoreAPITest)
+    endif()
+    if (DILIGENT_DLSS_SUPPORTED)
+        copy_dlss_dlls(DiligentCoreAPITest)
+    endif()
+endif()
+
 if(TARGET Diligent-HLSL2GLSLConverterLib)
     target_link_libraries(DiligentCoreAPITest PRIVATE Diligent-HLSL2GLSLConverterLib)
 endif()
@@ -159,7 +181,9 @@ PROPERTIES
 )
 
 if(PLATFORM_WIN32)
-    copy_required_dlls(DiligentCoreAPITest)
+    copy_required_dlls(DiligentCoreAPITest
+        DXC_REQUIRED YES
+    )
 endif()
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${ALL_SOURCE})

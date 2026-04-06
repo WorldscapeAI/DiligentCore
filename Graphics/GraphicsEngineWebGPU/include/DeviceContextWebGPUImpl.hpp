@@ -381,7 +381,7 @@ private:
     void CommitScissorRects(WGPURenderPassEncoder CmdEncoder);
 
     template <typename CmdEncoderType>
-    void CommitBindGroups(CmdEncoderType CmdEncoder, Uint32 CommitSRBMask);
+    void CommitBindGroups(CmdEncoderType CmdEncoder, Uint32 CommitSRBMask, bool InlineConstantsIntact = false);
 
     UploadMemoryManagerWebGPU::Allocation  AllocateUploadMemory(size_t Size, size_t Alignment = 16);
     DynamicMemoryManagerWebGPU::Allocation AllocateDynamicMemory(size_t Size, size_t Alignment = 16);
@@ -603,7 +603,7 @@ private:
     MappedTexturesCache     m_MappedTextures;
     MappedBuffersCache      m_MappedBuffers;
     DebugGroupStack         m_DebugGroupsStack;
-    DebugGroupStack         m_PendingDebugGroups;
+    DebugGroupStack         m_EndedDebugGroups;
     OcclusionQueryStack     m_OcclusionQueriesStack;
     PendingStagingResources m_PendingStagingReads;
     PendingStagingResources m_PendingStagingWrites;
