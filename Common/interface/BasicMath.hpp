@@ -474,6 +474,38 @@ template <class T> struct Vector3
             };
     }
 
+    // Random spot within a 1 unit Square.
+    constexpr static Vector3 RandPoint()
+    {
+        Vector3 rand_vec;
+        T two = static_cast<T>(2.0);
+        T one = static_cast<T>(1.0);
+        T max = static_cast<T>(RAND_MAX);
+
+        rand_vec.x = (((T)rand() / max) * two - one);
+        rand_vec.y = (((T)rand() / max) * two - one);
+        rand_vec.z = (((T)rand() / max) * two - one);
+
+        return rand_vec;
+    }
+
+    // Vector to random point on surface of unit sphere. Length
+    constexpr static Vector3 RandUnitVector()
+    {
+        Vector3 rand_vec;
+        T two = static_cast<T>(2.0);
+        T one = static_cast<T>(1.0);
+        T max = static_cast<T>(RAND_MAX);
+
+        rand_vec.x = (((T) rand() / max) * two - one);
+        rand_vec.y = (((T) rand() / max) * two - one);
+        rand_vec.z = (((T) rand() / max) * two - one);
+
+        rand_vec = normalize(rand_vec);
+        return rand_vec;
+    }
+
+
     template <typename Y>
     constexpr Vector3<Y> Recast() const
     {
@@ -2269,7 +2301,7 @@ constexpr Vector4<T> operator*(const Matrix4x4<T>& m, const Vector4<T>& v)
 }
 
 template <class T>
-constexpr Vector3<T> operator*(const Matrix3x3<T>& m, Vector3<T>& v)
+constexpr Vector3<T> operator*(const Matrix3x3<T>& m, const Vector3<T>& v)
 {
     Vector3<T> out;
     out[0] = m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z;
