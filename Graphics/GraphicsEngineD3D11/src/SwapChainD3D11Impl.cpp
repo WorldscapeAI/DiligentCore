@@ -103,7 +103,7 @@ void SwapChainD3D11Impl::CreateRTVandDSV()
         DepthBufferDesc.Format         = m_SwapChainDesc.DepthBufferFormat;
         DepthBufferDesc.SampleCount    = 1;
         DepthBufferDesc.Usage          = USAGE_DEFAULT;
-        DepthBufferDesc.BindFlags      = BIND_DEPTH_STENCIL;
+        DepthBufferDesc.BindFlags      = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
         DepthBufferDesc.CPUAccessFlags = CPU_ACCESS_NONE;
         DepthBufferDesc.MiscFlags      = MISC_TEXTURE_FLAG_NONE;
 

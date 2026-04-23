@@ -110,7 +110,7 @@ void SwapChainD3D12Impl::InitBuffersAndViews()
         DepthBufferDesc.Format      = m_SwapChainDesc.DepthBufferFormat;
         DepthBufferDesc.SampleCount = 1;
         DepthBufferDesc.Usage       = USAGE_DEFAULT;
-        DepthBufferDesc.BindFlags   = BIND_DEPTH_STENCIL;
+        DepthBufferDesc.BindFlags   = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
 
         DepthBufferDesc.ClearValue.Format               = GetDefaultTextureViewFormat(DepthBufferDesc.Format, TEXTURE_VIEW_DEPTH_STENCIL, DepthBufferDesc.BindFlags);
         DepthBufferDesc.ClearValue.DepthStencil.Depth   = m_SwapChainDesc.DefaultDepthValue;
