@@ -107,7 +107,9 @@ void SwapChainD3D12Impl::InitBuffersAndViews()
         DepthBufferDesc.Type        = RESOURCE_DIM_TEX_2D;
         DepthBufferDesc.Width       = m_SwapChainDesc.Width;
         DepthBufferDesc.Height      = m_SwapChainDesc.Height;
-        DepthBufferDesc.Format      = m_SwapChainDesc.DepthBufferFormat;
+		// Forcing this to Typeless so it can be used bot has depth and a shader resource for post processing.
+		// Again this data should come from a g_buffer so it knows when to ask for generic types or not.
+        DepthBufferDesc.Format      = TEX_FORMAT_R32_TYPELESS; //m_SwapChainDesc.DepthBufferFormat;
         DepthBufferDesc.SampleCount = 1;
         DepthBufferDesc.Usage       = USAGE_DEFAULT;
         DepthBufferDesc.BindFlags   = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
