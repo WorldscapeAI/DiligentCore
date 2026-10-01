@@ -436,7 +436,9 @@ void EngineFactoryD3D12Impl::CreateDeviceAndContextsD3D12(const EngineD3D12Creat
                         // D3D12 WARNING: ID3D12CommandList::ClearDepthStencilView: The clear values do not match those passed to resource creation.
                         // The clear operation is typically slower as a result; but will still clear to the desired value.
                         // [ EXECUTION WARNING #821: CLEARDEPTHSTENCILVIEW_MISMATCHINGCLEARVALUE]
-                        D3D12_MESSAGE_ID_CLEARDEPTHSTENCILVIEW_MISMATCHINGCLEARVALUE //
+                        D3D12_MESSAGE_ID_CLEARDEPTHSTENCILVIEW_MISMATCHINGCLEARVALUE,
+                        // D3D12 WARNING: QueryManagerD3D12::QueryManagerD3D12() knowningly creates heaps in the wrong state for generality reasons.
+                        D3D12_MESSAGE_ID_CREATERESOURCE_STATE_IGNORED
                     };
 
                 D3D12_INFO_QUEUE_FILTER NewFilter = {};
