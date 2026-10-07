@@ -3817,7 +3817,9 @@ struct EngineD3D12CreateInfo DILIGENT_DERIVE(EngineCreateInfo)
     Uint32 GPUDescriptorHeapSize[2]
 #if DILIGENT_CPP_INTERFACE
         {
-            16384, // D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+            // TRAVIS - 16384 only big enough for demos, 1 million is compatable with all DX12 hardware, 2 million only newer DX12.1+ devices.
+            // We using 512k because they have hardcoded another to share 32K of the total views.
+            524288, // D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
             1024   // D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
         }
 #endif
