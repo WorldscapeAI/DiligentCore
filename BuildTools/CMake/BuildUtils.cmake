@@ -30,12 +30,26 @@ if(PLATFORM_WIN32)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "$<TARGET_FILE:${DLL}>"
                     "$<TARGET_FILE_DIR:${TARGET_NAME}>")
+            if(MSVC AND DLL STREQUAL "Diligent-GraphicsEngineD3D12-shared")
+                # Diligent's runtime loader uses the architecture/configuration name, while the
+                # CMake target keeps the project-prefixed DLL name. Profile is a custom optimized
+                # configuration, so provide the loader-compatible Release-style alias beside the
+                # executable without changing the target's normal output name.
+                add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Profile>,copy_if_different,true>
+                        "$<TARGET_FILE:${DLL}>"
+                        "$<TARGET_FILE_DIR:${TARGET_NAME}>/GraphicsEngineD3D12_64r.dll")
+                add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Profile>,copy_if_different,true>
+                        "$<TARGET_PDB_FILE:${DLL}>"
+                        "$<TARGET_FILE_DIR:${TARGET_NAME}>/GraphicsEngineD3D12_64r.pdb")
+            endif()
             if(MSVC)
                 # Stage the PDB next to the DLL
                 # Release/MinSizeRel link without /DEBUG, so there is no PDB to copy, and we don't
                 # have a better way to check that a pdb is present AND is current for this build.
                 add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Release,MinSizeRel>,true,copy_if_different>
+                    COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:${RELEASE_CONFIGURATIONS_GENEX}>,true,copy_if_different>
                         "$<TARGET_PDB_FILE:${DLL}>"
                         "$<TARGET_FILE_DIR:${TARGET_NAME}>")
             endif()
